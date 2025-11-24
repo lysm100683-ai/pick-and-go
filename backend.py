@@ -165,3 +165,61 @@ def get_places(city, category_filter=None, limit=50):
     except Exception as e:
         print(f"시트 읽기 오류: {e}")
         return []
+
+# --- [backend.py 맨 아래에 추가] ---
+
+def get_real_duration_kakao(origin_lat, origin_lng, dest_lat, dest_lng):
+    """
+    카카오 모빌리티 API를 사용하여 자동차 이동 시간을 초(seconds) 단위로 반환
+    """
+    if not MY_KAKAO_KEY: return 999999 # 키 없으면 무시
+    
+    url = "https://apis-navi.kakaomobility.com/v1/directions"
+    headers = {"Authorization": f"KakaoAK {MY_KAKAO_KEY}"}
+    
+    # 카카오 네비는 "경도(lng),위도(lat)" 순서로 입력받습니다.
+    params = {
+        "origin": f"{origin_lng},{origin_lat}",
+        "destination": f"{dest_lng},{dest_lat}",
+        "priority": "RECOMMEND" # 추천경로
+    }
+    
+    try:
+        res = requests.get(url, headers=headers, params=params)
+        data = res.json()
+        # duration은 초 단위
+        duration = data['routes'][0]['summary']['duration']
+        return duration
+    except:
+        return 999999 # 에러 시 아주 큰 값 반환
+
+# --- [backend.py 맨 아래에 추가] ---
+
+def get_real_duration_google(origin_lat, origin_lng, dest_lat, dest_lng):
+    """
+    구글 Distance Matrix API를 사용하여 이동 시간(초)을 반환
+    """
+    if not MY_GOOGLE_KEY: return 999999
+    
+    try:
+        # googlemaps 클라이언트 생성 (이미 상단에 import googlemaps 되어 있어야 함)
+        gmaps = googlemaps.Client(key=MY_GOOGLE_KEY)
+        
+        # 거리 행렬 조회 (mode='driving' 또는 'walking', 'transit')
+        # 해외 여행지 특성에 맞춰 'driving'(차량) 또는 'walking'(도보) 권장
+        result = gmaps.distance_matrix(
+            origins=(origin_lat, origin_lng),
+            destinations=(dest_lat, dest_lng),
+            mode="driving" 
+        )
+        
+        # 응답 파싱
+        element = result['rows'][0]['elements'][0]
+        if element['status'] == 'OK':
+            # duration['value']는 초(seconds) 단위
+            return element['duration']['value']
+        else:
+            return 999999
+    except Exception as e:
+        print(f"Google Maps API Error: {e}")
+        return 999999

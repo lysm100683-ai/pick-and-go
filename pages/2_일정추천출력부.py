@@ -1,30 +1,31 @@
 import streamlit as st
 import sys
 import os
-import sqlite3
 import pandas as pd
 import json
 import random
+import math
 from datetime import date, timedelta
+import streamlit.components.v1 as components 
+import requests # backend 호출용
 
 # [경로 설정] backend.py 위치 찾기 
 current_dir = os.path.dirname(os.path.abspath(__file__))
 parent_dir = os.path.dirname(current_dir)
 sys.path.append(parent_dir)
 
-import backend  # API 호출 및 DB 경로용
-import streamlit.components.v1 as components 
+import backend 
 
 # ==========================================
-# 👇 [필수] 지도 표시용 키 (배포 시 secrets 사용, 로컬에선 직접 입력)
+# 👇 [필수] 지도 표시용 키 (배포 시 secrets 사용)
 # ==========================================
 try:
     KAKAO_MAPS_JS_KEY = st.secrets["KAKAO_JS_KEY"]
     GOOGLE_MAPS_JS_KEY = st.secrets["GOOGLE_JS_KEY"]
 except:
-    # 로컬 테스트용 (여기에 본인 키를 넣으세요)
+    # 로컬 테스트용 키 (없으면 비워두세요)
+    GOOGLE_MAPS_JS_KEY = ""
     KAKAO_MAPS_JS_KEY = "" 
-    GOOGLE_MAPS_JS_KEY = "" 
 # ==========================================
 
 st.set_page_config(page_title="픽앤고 결과", page_icon="✈️", layout="wide", initial_sidebar_state="collapsed")
@@ -42,6 +43,9 @@ st.markdown("""
     .place-name { font-size: 1.1rem; font-weight: 800; color: #333; margin-bottom: 4px; }
     .place-desc { font-size: 0.85rem; color: #666; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
     .score-tag { background-color: #e8f0fe; color: #1a73e8; padding: 2px 6px; border-radius: 4px; font-size: 0.7rem; font-weight: bold; margin-left: 5px; }
+    /* 라디오 버튼 스타일 수정 */
+    div[role="radiogroup"] > label > div:first-child { display: none; }
+    div[role="radiogroup"] { gap: 10px; display: flex; flex-direction: row; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -58,6 +62,7 @@ def check_is_domestic(city_name):
 
 # --- [1] 지도 렌더링 함수 ---
 def render_kakao_map(markers, path):
+    # 마커가 없으면 기본 좌표(제주)
     if not markers: avg_lat, avg_lng = 33.450701, 126.570667
     else:
         avg_lat = sum([m['lat'] for m in markers]) / len(markers)
@@ -73,15 +78,37 @@ def render_kakao_map(markers, path):
         var markersData = {json.dumps(markers)};
         var pathData = {json.dumps(path)};
         
-        if (markersData.length > 0) {{
+        // 경로 그리기
+        if (pathData.length > 0) {{
             var linePath = pathData.map(p => new kakao.maps.LatLng(p.lat, p.lng));
-            new kakao.maps.Polyline({{ path: linePath, strokeWeight: 4, strokeColor: '#1A73E8', strokeOpacity: 0.8, strokeStyle: 'solid' }}).setMap(map);
+            var polyline = new kakao.maps.Polyline({{
+                path: linePath,
+                strokeWeight: 5,
+                strokeColor: '#1A73E8',
+                strokeOpacity: 0.8,
+                strokeStyle: 'solid'
+            }});
+            polyline.setMap(map);
+        }}
+
+        // 마커 그리기
+        if (markersData.length > 0) {{
+            var bounds = new kakao.maps.LatLngBounds(); // 지도 범위 재설정용
+            
             markersData.forEach((m, i) => {{
-                var marker = new kakao.maps.Marker({{ map: map, position: new kakao.maps.LatLng(m.lat, m.lng), title: m.title }});
+                var position = new kakao.maps.LatLng(m.lat, m.lng);
+                var marker = new kakao.maps.Marker({{ map: map, position: position, title: m.title }});
                 var iw = new kakao.maps.InfoWindow({{ content: '<div style="padding:5px;font-size:12px;color:black;">' + (i+1) + '. ' + m.title + '</div>' }});
                 kakao.maps.event.addListener(marker, 'mouseover', () => iw.open(map, marker));
                 kakao.maps.event.addListener(marker, 'mouseout', () => iw.close());
+                
+                bounds.extend(position); // 범위에 추가
             }});
+            
+            // 모든 마커가 보이도록 지도 범위 재설정
+            if (markersData.length > 1) {{
+                map.setBounds(bounds);
+            }}
         }}
     </script>
     """
@@ -101,30 +128,29 @@ def render_google_map(markers, path):
             const map = new google.maps.Map(document.getElementById("map"), {{ zoom: 12, center: {{ lat: {avg_lat}, lng: {avg_lng} }} }});
             const markers = {json.dumps(markers)};
             const path = {json.dumps(path)};
-            new google.maps.Polyline({{ path: path, map: map, strokeColor: "#1A73E8", strokeWeight: 4 }});
+            
+            const polyline = new google.maps.Polyline({{ path: path, map: map, strokeColor: "#1A73E8", strokeWeight: 5 }});
+            
+            const bounds = new google.maps.LatLngBounds();
+            
             markers.forEach((m, i) => {{
-                new google.maps.Marker({{ position: {{ lat: m.lat, lng: m.lng }}, map: map, label: (i+1).toString(), title: m.title }});
+                const pos = {{ lat: m.lat, lng: m.lng }};
+                new google.maps.Marker({{ position: pos, map: map, label: (i+1).toString(), title: m.title }});
+                bounds.extend(pos);
             }});
+            
+            if (markers.length > 1) {{
+                map.fitBounds(bounds);
+            }}
         }}
     </script>
     <script src="https://maps.googleapis.com/maps/api/js?key={GOOGLE_MAPS_JS_KEY}&callback=initMap" async defer></script>
     </body></html>"""
     return html
 
-# --- [2] 데이터 로직 (이 파일 내에서 직접 DB 조회) ---
+# --- [2] 데이터 로직 ---
 def get_db_places(city):
-    """backend.py의 경로를 이용해 직접 DB를 조회합니다."""
-    try:
-        conn = sqlite3.connect(backend.DB_NAME)
-        conn.row_factory = sqlite3.Row
-        cursor = conn.cursor()
-        cursor.execute("SELECT * FROM places WHERE city LIKE ?", (f"%{city}%",))
-        rows = cursor.fetchall()
-        conn.close()
-        return [dict(r) for r in rows]
-    except Exception as e:
-        st.error(f"DB 조회 오류: {e}")
-        return []
+    return backend.get_places(city)
 
 def calculate_score(place, user_styles):
     style_keywords = {
@@ -136,7 +162,12 @@ def calculate_score(place, user_styles):
         "자연": ["nature", "mountain", "lake", "hiking", "자연", "산", "호수", "등산"]
     }
     
-    base_score = place.get('rating', 0) * 10
+    try:
+        rating = float(place.get('rating', 0))
+    except:
+        rating = 3.0
+        
+    base_score = rating * 10
     if base_score == 0: base_score = 30
     
     bonus_score = 0
@@ -152,13 +183,30 @@ def calculate_score(place, user_styles):
     final_score = base_score + bonus_score + random.randint(0, 5)
     return final_score, matched_tags
 
+# --- 거리 계산 알고리즘 ---
+def haversine_distance(lat1, lon1, lat2, lon2):
+    if not (lat1 and lon1 and lat2 and lon2): return 99999
+    try:
+        lat1, lon1, lat2, lon2 = map(float, [lat1, lon1, lat2, lon2])
+    except:
+        return 99999
+
+    R = 6371 
+    dLat = math.radians(lat2 - lat1)
+    dLon = math.radians(lon2 - lon1)
+    a = math.sin(dLat/2) * math.sin(dLat/2) + \
+        math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * \
+        math.sin(dLon/2) * math.sin(dLon/2)
+    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
+    return R * c
+
+# --- 일정 생성 함수 (속도 개선 적용됨) ---
 def generate_plans(data, duration):
     city = data['dest_city']
     user_styles = data['style']
+    is_domestic = check_is_domestic(city)
     
-    # [수정 완료] 여기서 위에서 정의한 get_db_places 함수를 호출합니다.
     places = get_db_places(city)
-    
     if not places: return []
 
     scored_places = []
@@ -171,8 +219,8 @@ def generate_plans(data, duration):
     scored_places.sort(key=lambda x: x['score'], reverse=True)
     
     food_keywords = ['음식', '식당', '카페', 'food', 'restaurant', 'cafe', 'bakery', 'meal']
-    foods = [p for p in scored_places if any(k in str(p['category']).lower() for k in food_keywords)]
-    sights = [p for p in scored_places if p not in foods]
+    all_foods = [p for p in scored_places if any(k in str(p['category']).lower() for k in food_keywords)]
+    all_sights = [p for p in scored_places if p not in all_foods]
     
     themes = [
         {"name": f"✨ {city} 맞춤 추천 코스", "desc": "취향 100% 반영 최적 코스", "mix_ratio": "balanced"},
@@ -184,30 +232,70 @@ def generate_plans(data, duration):
     final_plans = []
     
     for theme in themes:
-        cur_sights = sights[:30]
-        cur_foods = foods[:30]
-        random.shuffle(cur_sights)
-        random.shuffle(cur_foods)
+        pool_sights = all_sights[:] 
+        pool_foods = all_foods[:]
         
         days = []
-        s_idx, f_idx = 0, 0
         
+        if theme['mix_ratio'] == 'food_heavy':
+            schedule_template = [
+                ("11:00", "아점", "food"),
+                ("13:00", "산책", "sight"),
+                ("15:00", "카페", "food"),
+                ("18:00", "저녁", "food")
+            ]
+        elif theme['mix_ratio'] == 'relaxed':
+            schedule_template = [
+                ("10:30", "오전 여유", "sight"),
+                ("13:00", "점심", "food"),
+                ("15:30", "오후", "sight")
+            ]
+        else:
+            schedule_template = [
+                ("10:00", "오전 관광", "sight"),
+                ("12:30", "점심", "food"),
+                ("15:00", "오후 관광", "sight"),
+                ("18:30", "저녁", "food")
+            ]
+
         for d in range(1, duration + 1):
             day_places = []
-            if theme['mix_ratio'] == 'food_heavy':
-                if f_idx < len(cur_foods): day_places.append(make_place("11:00", "아점", cur_foods[f_idx])); f_idx+=1
-                if s_idx < len(cur_sights): day_places.append(make_place("13:00", "산책", cur_sights[s_idx])); s_idx+=1
-                if f_idx < len(cur_foods): day_places.append(make_place("15:00", "카페", cur_foods[f_idx])); f_idx+=1
-                if f_idx < len(cur_foods): day_places.append(make_place("18:00", "저녁", cur_foods[f_idx])); f_idx+=1
-            elif theme['mix_ratio'] == 'relaxed':
-                if s_idx < len(cur_sights): day_places.append(make_place("10:30", "오전 여유", cur_sights[s_idx])); s_idx+=1
-                if f_idx < len(cur_foods): day_places.append(make_place("13:00", "점심", cur_foods[f_idx])); f_idx+=1
-                if s_idx < len(cur_sights): day_places.append(make_place("15:30", "오후", cur_sights[s_idx])); s_idx+=1
-            else: 
-                if s_idx < len(cur_sights): day_places.append(make_place("10:00", "오전 관광", cur_sights[s_idx])); s_idx+=1
-                if f_idx < len(cur_foods): day_places.append(make_place("12:30", "점심", cur_foods[f_idx])); f_idx+=1
-                if s_idx < len(cur_sights): day_places.append(make_place("15:00", "오후 관광", cur_sights[s_idx])); s_idx+=1
-                if f_idx < len(cur_foods): day_places.append(make_place("18:30", "저녁", cur_foods[f_idx])); f_idx+=1
+            last_place = None 
+            
+            for time, type_name, p_type in schedule_template:
+                candidates = pool_foods if p_type == "food" else pool_sights
+                if not candidates: continue 
+                
+                selected = None
+                
+                if last_place is None:
+                    selected = candidates[0]
+                else:
+                    last_lat = last_place['lat']
+                    last_lng = last_place['lng']
+                    
+                    # [최적화] 거리순 상위 3개만 추려서 API 호출 (속도 향상)
+                    candidates.sort(key=lambda p: haversine_distance(last_lat, last_lng, p['lat'], p['lng']))
+                    top_candidates = candidates[:3] 
+                    
+                    if is_domestic:
+                        try:
+                            best_candidate = min(top_candidates, key=lambda p: backend.get_real_duration_kakao(last_lat, last_lng, p['lat'], p['lng']))
+                        except:
+                            best_candidate = top_candidates[0]
+                    else:
+                        try:
+                            best_candidate = min(top_candidates, key=lambda p: backend.get_real_duration_google(last_lat, last_lng, p['lat'], p['lng']))
+                        except:
+                            best_candidate = top_candidates[0]
+                    
+                    selected = best_candidate
+                
+                if selected:
+                    candidates.remove(selected) 
+                    day_places.append(make_place(time, type_name, selected))
+                    last_place = selected 
+            
             days.append({"day": d, "places": day_places})
             
         all_scores = [p['raw_score'] for d in days for p in d['places']]
@@ -222,14 +310,21 @@ def generate_plans(data, duration):
 def make_place(time, type_name, db_row):
     img = db_row.get('img_url')
     if not img: img = "https://source.unsplash.com/400x300/?travel"
+    
     tags_html = ""
     if 'matched_tags' in db_row and db_row['matched_tags']:
         tags_html = " ".join([f"<span class='score-tag'>#{t}</span>" for t in db_row['matched_tags']])
+    
+    try:
+        raw_score = int(db_row.get('score', 80))
+    except:
+        raw_score = 80
+
     return {
         "time": time, "type": type_name, "name": db_row['name'],
         "desc": f"{db_row['category']} | {db_row['address']} {tags_html}",
         "lat": db_row['lat'], "lng": db_row['lng'], "url": db_row['img_url'],
-        "raw_score": db_row.get('score', 80), "img": img
+        "raw_score": raw_score, "img": img
     }
 
 # --- [3] 메인 화면 ---
@@ -265,19 +360,20 @@ with col1:
 with col2:
     st.markdown("<br>", unsafe_allow_html=True)
     if st.button("🔄 DB 업데이트 및 재생성", use_container_width=True):
-        backend.init_db()
+        backend.init_db() 
         keywords = ["가볼만한곳", "명소"] + data['style']
         with st.spinner(f"📡 {data['dest_city']} 데이터 수집 중... (모든 API 가동)"):
-            # 국내/해외 API 모두 호출
             backend.fetch_all_data(data['dest_city'], keywords, is_domestic=True)
             backend.fetch_all_data(data['dest_city'], keywords, is_domestic=False)
         
         if "plans" in st.session_state: del st.session_state["plans"]
         st.rerun()
 
+# [수정] 로딩 스피너 적용
 if "plans" not in st.session_state:
-    backend.init_db()
-    generated = generate_plans(data, duration)
+    with st.spinner("🗺️ 최적의 동선을 계산하고 있습니다... (약 1분 소요)"):
+        generated = generate_plans(data, duration)
+        
     if generated:
         st.session_state["plans"] = generated
         st.rerun()
@@ -298,32 +394,56 @@ if "plans" in st.session_state:
             </div>
             """, unsafe_allow_html=True)
             
-            all_markers = []
-            all_path = []
-            for d in plan['days']:
+            # --- [추가 기능] 날짜별 필터링 기능 ---
+            st.write("") # 간격
+            day_options = ["전체 동선"] + [f"{d['day']}일차" for d in plan['days']]
+            # 가로형 라디오 버튼으로 날짜 선택
+            selected_day_label = st.radio(
+                "📅 지도에 표시할 일정", 
+                day_options, 
+                horizontal=True, 
+                key=f"day_sel_{i}",
+                label_visibility="collapsed"
+            )
+
+            # 선택된 날짜에 맞는 데이터만 필터링
+            map_markers = []
+            map_path = []
+            
+            if selected_day_label == "전체 동선":
+                target_days = plan['days']
+            else:
+                # "1일차" -> 1 (숫자 추출)
+                target_day_num = int(selected_day_label.replace("일차", ""))
+                target_days = [d for d in plan['days'] if d['day'] == target_day_num]
+            
+            # 필터링된 데이터 수집
+            for d in target_days:
                 for p in d['places']:
                     if p['lat'] and p['lng']:
-                        all_markers.append({"lat": p['lat'], "lng": p['lng'], "title": p['name']})
-                        all_path.append({"lat": p['lat'], "lng": p['lng']})
+                        map_markers.append({"lat": p['lat'], "lng": p['lng'], "title": p['name']})
+                        map_path.append({"lat": p['lat'], "lng": p['lng']})
             
-            # --- [지도 선택 로직] ---
+            # --- 지도 출력 ---
             if is_korea:
                 map_col1, map_col2 = st.columns([8, 2])
                 with map_col2:
                     map_type = st.radio("지도 선택", ["Kakao Map", "Google Map"], horizontal=True, label_visibility="collapsed", key=f"map_sel_{i}")
                 
                 if map_type == "Google Map":
-                    if GOOGLE_MAPS_JS_KEY: components.html(render_google_map(all_markers, all_path), height=400)
+                    if GOOGLE_MAPS_JS_KEY: components.html(render_google_map(map_markers, map_path), height=400)
                     else: st.warning("Google Maps JS Key가 없습니다.")
                 else:
-                    components.html(render_kakao_map(all_markers, all_path), height=400)
+                    components.html(render_kakao_map(map_markers, map_path), height=400)
             else:
                 st.caption(f"🌍 {data['dest_city']} 지역은 Google Maps로 표시됩니다.")
-                if GOOGLE_MAPS_JS_KEY: components.html(render_google_map(all_markers, all_path), height=400)
+                if GOOGLE_MAPS_JS_KEY: components.html(render_google_map(map_markers, map_path), height=400)
                 else: st.warning("⚠️ 지도를 보려면 Google Maps JS Key를 입력해주세요.")
             
             st.divider()
             
+            # --- 일정 카드 출력 (여기는 항상 전체 다 보여주거나, 필요하면 여기도 필터링 가능) ---
+            # 사용자가 지도만 보고 싶어했으므로 아래는 전체 출력 유지
             for day in plan['days']:
                 st.caption(f"📅 Day {day['day']}")
                 if not day['places']: st.info("일정이 비어있습니다.")
