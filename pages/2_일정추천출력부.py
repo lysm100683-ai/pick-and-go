@@ -174,7 +174,7 @@ def calculate_score(place, user_styles):
     final_score = base_score + bonus_score
     return final_score, matched_tags
 
-# --- 거리 계산 알고리즘 ---
+# --- 거리 계산 알고리즘 (API 호출 대체) ---
 def haversine_distance(lat1, lon1, lat2, lon2):
     if not (lat1 and lon1 and lat2 and lon2): return 99999
     try: lat1, lon1, lat2, lon2 = map(float, [lat1, lon1, lat2, lon2])
@@ -189,19 +189,43 @@ def haversine_distance(lat1, lon1, lat2, lon2):
     c = 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
     return R * c
 
-# --- [3] 예약 딥링크 생성 함수 추가 ---
+# --- [3] 예약 딥링크 생성 함수 ---
 def get_booking_url(place_name):
     # 네이버 검색을 통한 예약 딥링크 (가장 범용적)
     base_url = "https://m.search.naver.com/search.naver?query="
     return f"{base_url}{place_name} 예약"
 
-# --- 일정 생성 함수 (수정됨: 속도 개선 + Re-roll + 숙소) ---
+# --- 일정 생성 함수 (수정됨: 중복 제거, 속도 개선, Re-roll, 숙소 포함) ---
 def generate_plans(data, duration):
     city = data['dest_city']
     user_styles = data['style']
     
     places = get_db_places(city)
     if not places: return []
+
+    # ==========================================
+    # 🧹 [NEW] 데이터 중복 제거 로직
+    # ==========================================
+    # 1. 퀄리티가 좋은 데이터(이미지 있음, 평점 높음)를 우선순위로 정렬
+    # (이미지가 있는 것을 앞으로, 그 다음은 평점 높은 순)
+    places.sort(key=lambda x: (x.get('img_url') != "", float(x.get('rating', 0))), reverse=True)
+
+    unique_places = []
+    seen_names = set()
+
+    for p in places:
+        # 이름의 공백과 특수문자를 제거하고 소문자로 변환하여 비교 
+        # (예: "스타벅스 강남점" -> "스타벅스강남점")
+        clean_name = ''.join(filter(str.isalnum, p['name'])).lower()
+        
+        # 이미 등록된 이름이 아니라면 추가
+        if clean_name not in seen_names:
+            seen_names.add(clean_name)
+            unique_places.append(p)
+    
+    # 중복 제거된 리스트로 교체
+    places = unique_places
+    # ==========================================
 
     scored_places = []
     for p in places:
@@ -210,10 +234,9 @@ def generate_plans(data, duration):
         p['matched_tags'] = tags
         scored_places.append(p)
         
-    # [수정] 점수 순으로 정렬하되, 상위권 내에서 랜덤성을 부여해 Re-roll이 동작하게 함
     scored_places.sort(key=lambda x: x['score'], reverse=True)
     
-    # 상위 40개 정도만 추려서 셔플 (Re-roll 시 매번 결과가 달라짐)
+    # 상위 40개 정도만 추려서 셔플 (Re-roll 시 결과가 바뀌도록 무작위성 부여)
     top_tier_count = min(len(scored_places), 40)
     top_tier = scored_places[:top_tier_count]
     rest_tier = scored_places[top_tier_count:]
@@ -221,9 +244,10 @@ def generate_plans(data, duration):
     shuffled_places = top_tier + rest_tier
     
     # 카테고리 분류
-    food_keywords = ['음식', '식당', '카페', 'food', 'restaurant', 'cafe', 'bakery', 'meal']
+    food_keywords = ['음식', '식당', '카페', 'food', 'restaurant', 'cafe', 'bakery', 'meal', 'bar', 'pub']
     hotel_keywords = ['hotel', 'motel', 'resort', 'pension', '숙소', '호텔', '리조트', '펜션']
     
+    # 각 후보군 리스트 생성
     all_foods = [p for p in shuffled_places if any(k in str(p['category']).lower() for k in food_keywords)]
     all_hotels = [p for p in shuffled_places if any(k in str(p['category']).lower() for k in hotel_keywords)]
     all_sights = [p for p in shuffled_places if (p not in all_foods) and (p not in all_hotels)]
@@ -238,16 +262,19 @@ def generate_plans(data, duration):
     final_plans = []
     
     for theme in themes:
-        # 테마별 풀 복사 (셔플해서 매번 다르게)
+        # 각 테마별 독립적인 후보 풀 생성 (각 테마별로 중복 없이 뽑기 위함)
+        # 이 리스트에서 remove하면 해당 테마 내의 다른 날짜에 중복 등장하지 않음
         pool_sights = all_sights[:] 
         pool_foods = all_foods[:]
         pool_hotels = all_hotels[:]
+        
+        # 무작위성 추가
         random.shuffle(pool_sights)
         random.shuffle(pool_foods)
         
         days = []
         
-        # [수정] 숙소(hotel) 포함된 템플릿
+        # [수정] 숙소(hotel) 포함된 스케줄 템플릿
         if theme['mix_ratio'] == 'food_heavy':
             schedule_template = [
                 ("11:00", "아점", "food"),
@@ -278,7 +305,6 @@ def generate_plans(data, duration):
             last_place = None 
             
             for time, type_name, p_type in schedule_template:
-                # 후보군 선택
                 if p_type == "food": candidates = pool_foods
                 elif p_type == "hotel": candidates = pool_hotels
                 else: candidates = pool_sights
@@ -288,21 +314,23 @@ def generate_plans(data, duration):
                 selected = None
                 
                 if last_place is None:
+                    # 첫 일정은 후보군 리스트의 첫 번째(점수가 가장 높은 무작위) 선택
                     selected = candidates[0]
                 else:
                     last_lat = last_place['lat']
                     last_lng = last_place['lng']
                     
-                    # [최적화 수정] API 호출 제거 -> 하버사인 거리로만 선택 (속도 < 1초)
-                    candidates.sort(key=lambda p: haversine_distance(last_lat, last_lng, p['lat'], p['lng']))
+                    # [속도 개선] API 대신 하버사인 거리로 정렬
+                    candidates.sort(key=lambda p: haversine_distance(last_lat, last_lng, p.get('lat'), p.get('lng')))
                     
-                    # 가장 가까운 곳 선택 (API 호출 X)
-                    selected = candidates[0]
+                    selected = candidates[0] # 가장 가까운 곳 선택
                 
                 if selected:
+                    # 선택된 장소를 후보 풀에서 제거하여 중복 방지 (핵심 로직)
                     candidates.remove(selected) 
                     day_places.append(make_place(time, type_name, selected))
-                    # 숙소는 다음날 출발지가 되므로 last_place로 업데이트
+                    
+                    # 숙소는 다음날 출발지가 되므로 last_place로 업데이트 (호텔이 아닌 경우도 다음 장소 계산을 위해 업데이트)
                     last_place = selected 
             
             days.append({"day": d, "places": day_places})
