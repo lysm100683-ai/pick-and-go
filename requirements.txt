@@ -1,6 +1,10 @@
 streamlit
-googlemaps
-requests
 pandas
+requests
+googlemaps
 gspread
 oauth2client
+fastapi
+uvicorn
+pydantic
+openpyxl
