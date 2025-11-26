@@ -3,7 +3,7 @@ import streamlit as st
 from datetime import date, timedelta
 from typing import Dict, Any
 
-# 1. 페이지 설정
+# 1. 페이지 설정ddd
 st.set_page_config(
     page_title="픽앤고트래블 | 맞춤형 여행 서비스 시스템",
     page_icon="✈️",

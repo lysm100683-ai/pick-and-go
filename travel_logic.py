@@ -5,7 +5,7 @@ import math
 import random
 from datetime import date, timedelta
 
-# [경로 설정] backend.py 위치 찾기 (상위 폴더)
+# [경로 설정] backend.py 위치 찾기 (상위 폴더)d
 current_dir = os.path.dirname(os.path.abspath(__file__))
 parent_dir = os.path.dirname(current_dir)
 sys.path.append(parent_dir)

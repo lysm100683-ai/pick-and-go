@@ -13,7 +13,7 @@ parent_dir = os.path.dirname(current_dir)
 sys.path.append(parent_dir)
 
 import backend 
-import travel_logic as logic  # [핵심] 분리한 로직 파일 import
+import travel_logic as logic  # [핵심] 분리한 로직 파일 importddd
 
 # ==========================================
 # 👇 지도 키 설정

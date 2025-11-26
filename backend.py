@@ -26,7 +26,7 @@ try:
     # 구글 시트 인증 정보 (Secrets에 통째로 넣을 예정)
     GOOGLE_SHEET_CREDENTIALS = st.secrets["gcp_service_account"]
 except:
-    # 로컬 테스트용 (여기에 본인 키 입력)
+    # 로컬 테스트용 (여기에 본인 키 입력)dd
     MY_KAKAO_KEY = ""   # (예: a1b2c3d...)
     MY_GOOGLE_KEY = ""      # 구글 키 (없으면 비워두세요)
     MY_TOUR_KEY = ""        # 관광공사 키 (없으면 비워두세요)
