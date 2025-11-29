@@ -91,7 +91,9 @@ def save_bulk_data():
             if cursor.fetchone() is None:
                 new_rows.append((
                     str(data['id']), data['source'], data['name'], data['city'], data['category'],
-                    float(data['lat']), float(data['lng']), data['address'], float(data['rating']),
+                    # 💡 수정: 좌표가 None일 경우 0.0으로 저장 (DB 저장 시점 방어)
+                    float(data.get('lat', 0.0)), float(data.get('lng', 0.0)), 
+                    data['address'], float(data['rating']),
                     data['img_url'], data.get('desc', ''), str(datetime.now())
                 ))
                 new_places_count += 1
@@ -143,6 +145,11 @@ def get_places(city, category_filter=None, limit=50):
     if CACHED_PLACES.empty: return []
 
     df = CACHED_PLACES.copy()
+    
+    # 💡 핵심 수정: 좌표 컬럼의 NaN을 0.0으로 대체하여 NoneType 비교를 방지합니다.
+    df['lat'] = df['lat'].fillna(0.0)
+    df['lng'] = df['lng'].fillna(0.0)
+    
     df['city'] = df['city'].astype(str)
     filtered_df = df[df['city'].str.contains(city, na=False)] 
     
@@ -198,13 +205,15 @@ def save_movement_cache(origin_lat, origin_lng, dest_lat, dest_lng, mode, durati
 def get_real_duration_kakao(lat1, lng1, lat2, lng2, mode='driving'): # 🚀 mode 파라미터 추가
     """Kakao API를 사용하여 실제 이동 시간을 조회합니다. (한국 전용)"""
     
+    # 💡 수정: 좌표가 0.0일 경우 (None 처리된 경우) 이동 불가 처리
+    if lat1 == 0.0 or lng1 == 0.0 or lat2 == 0.0 or lng2 == 0.0: return 999999
     if KAKAO_MAPS_REST_KEY == "YOUR_KAKAO_REST_API_KEY": return 30*60
 
     origin_key = _get_loc_key(lat1, lng1)
     dest_key = _get_loc_key(lat2, lng2)
     
     # 🚀 mode를 캐시 조회에 사용
-    cached = get_movement_cache(origin_key, dest_key, mode)
+    cached = get_movement_cache(lat1, lng1, lat2, lng2, mode)
     if cached is not None: return cached
     
     
@@ -237,7 +246,7 @@ def get_real_duration_kakao(lat1, lng1, lat2, lng2, mode='driving'): # 🚀 mode
         if duration_seconds is None: return 999999
         
         # 🚀 mode를 캐시 저장에 사용
-        save_movement_cache(origin_key, dest_key, mode, duration_seconds, is_korea=True)
+        save_movement_cache(lat1, lng1, lat2, lng2, mode, duration_seconds, is_korea=True)
         return duration_seconds
     except Exception as e: 
         return 999999
@@ -245,6 +254,7 @@ def get_real_duration_kakao(lat1, lng1, lat2, lng2, mode='driving'): # 🚀 mode
 def get_real_duration_google_bulk(lat1, lng1, candidates, mode='driving'): # 🚀 mode 파라미터 추가
     """Google Directions API를 사용하여 여러 목적지까지의 이동 시간을 병렬로 조회합니다."""
     
+    if lat1 == 0.0 or lng1 == 0.0: return [(999999, p) for p in candidates] # 💡 수정: 출발지 좌표가 0.0인 경우
     if GMAPS_API_KEY == "YOUR_GOOGLE_MAPS_API_KEY": return [(30*60, p) for p in candidates]
 
     gmaps = googlemaps.Client(key=GMAPS_API_KEY)
@@ -252,11 +262,16 @@ def get_real_duration_google_bulk(lat1, lng1, candidates, mode='driving'): # �
     results = []
     
     for p in candidates:
+        # 💡 수정: 목적지 좌표가 0.0인 경우 API 호출 없이 실패 처리
+        if p['lat'] == 0.0 or p['lng'] == 0.0:
+            results.append((999999, p))
+            continue
+            
         origin_key = _get_loc_key(lat1, lng1)
         dest_key = _get_loc_key(p['lat'], p['lng'])
         
         # 🚀 mode를 캐시 조회에 사용
-        cached = get_movement_cache(origin_key, dest_key, mode) 
+        cached = get_movement_cache(lat1, lng1, p['lat'], p['lng'], mode) 
         if cached is not None:
             results.append((cached, p))
             continue
@@ -275,7 +290,7 @@ def get_real_duration_google_bulk(lat1, lng1, candidates, mode='driving'): # �
                 duration_seconds = directions_result[0]['legs'][0]['duration']['value']
             
             # 🚀 mode를 캐시 저장에 사용
-            save_movement_cache(origin_key, dest_key, mode, duration_seconds, is_korea=False)
+            save_movement_cache(lat1, lng1, p['lat'], p['lng'], mode, duration_seconds, is_korea=False)
             results.append((duration_seconds, p))
 
         except Exception as e:
@@ -308,11 +323,15 @@ def fetch_google(city, keywords):
                 if 'photos' in p:
                     ref = p['photos'][0]['photo_reference']
                     img = f"https://maps.googleapis.com/maps/api/place/photo?maxwidth=400&photoreference={ref}&key={MY_GOOGLE_KEY}"
+                    
+                # 💡 수정: 좌표에 기본값 0.0 지정
+                lat = p['geometry']['location'].get('lat')
+                lng = p['geometry']['location'].get('lng')
+
                 save_place({"id": f"google_{p['place_id']}", "source": "google", "name": p['name'], "city": city,
-                            "category": p.get('types',['place'])[0], "lat": p['geometry']['location']['lat'],
-                            "lng": p['geometry']['location']['lng'], "address": p.get('formatted_address',''),
-                            "rating": p.get('rating',0.0), "img_url": img, "desc": "Google", 
-                            "lat": p['geometry']['location']['lat'], "lng": p['geometry']['location']['lng']})
+                            "category": p.get('types',['place'])[0], "lat": lat or 0.0, "lng": lng or 0.0,
+                            "address": p.get('formatted_address',''),
+                            "rating": p.get('rating',0.0), "img_url": img, "desc": "Google"})
         except Exception as e: 
              print(f"❌ [Google API Error] '{keyword}' 처리 중 예외 발생: {e}")
              pass
@@ -325,10 +344,13 @@ def fetch_kakao(city, keywords):
         try:
             res = requests.get("https://dapi.kakao.com/v2/local/search/keyword.json", headers=headers, params={"query": f"{city} {keyword}", "size": 15})
             for p in res.json().get('documents', []):
+                # 💡 수정: 좌표에 기본값 0.0 지정
+                lat = float(p.get('y', 0.0))
+                lng = float(p.get('x', 0.0))
+                
                 save_place({"id": f"kakao_{p['id']}", "source": "kakao", "name": p['place_name'], "city": city,
-                            "category": p['category_name'].split(">")[-1].strip(), "lat": float(p['y']), "lng": float(p['x']),
-                            "address": p['road_address_name'], "rating": 0.0, "img_url": p['place_url'], "desc": p['phone'],
-                            "lat": float(p['y']), "lng": float(p['x'])})
+                            "category": p['category_name'].split(">")[-1].strip(), "lat": lat, "lng": lng,
+                            "address": p['road_address_name'], "rating": 0.0, "img_url": p['place_url'], "desc": p['phone']})
         except: pass
 
 def fetch_tourapi(city):

@@ -6,10 +6,14 @@ import random
 import concurrent.futures 
 from datetime import date, timedelta, datetime, time
 
-# [경로 설정] backend.py 위치 찾기 (상위 폴더)d
+# [경로 설정] backend.py 위치 찾기 (상위 폴더)
 current_dir = os.path.dirname(os.path.abspath(__file__))
 parent_dir = os.path.dirname(current_dir)
-sys.path.append(parent_dir)
+if parent_dir not in sys.path: # 경로 중복 방지
+    sys.path.append(parent_dir)
+
+# backend 모듈 import
+import backend
 
 # --- 설정값 ---
 # 📌 권장 체류 시간 (초 단위)
@@ -38,22 +42,38 @@ def check_is_domestic(city_name):
         "경주", "전주", "여수", "속초", "춘천", "가평", "양평", "포항", "거제", "남해", 
         "통영", "군산", "목포", "순천", "안동", "청주", "충주", "천안", "세종"
     ]
+    if not city_name: return False # city_name이 None이나 빈 문자열인 경우 방지
     if any(k in city_name for k in korean_cities): return True
     if "한국" in city_name or "대한민국" in city_name: return True
     return False
 
 # --- [기능 2] 거리 계산 (Haversine) ---
 def haversine_distance(lat1, lon1, lat2, lon2):
-    if not (lat1 and lon1 and lat2 and lon2): return 99999
+    # 💡 수정: NoneType이 들어와도 float으로 강제 변환 시도 (backend.py에서 이미 0.0으로 처리했겠지만 2차 방어)
     try: lat1, lon1, lat2, lon2 = map(float, [lat1, lon1, lat2, lon2])
     except: return 99999
+    
+    # 0.0 좌표는 유효하지 않다고 간주
+    if lat1 == 0.0 or lon1 == 0.0 or lat2 == 0.0 or lon2 == 0.0: return 99999 
+
+    # (이하 기존 Haversine 로직 유지)
+    R = 6371 # 지구 반지름 (km)
+    dLat = math.radians(lat2 - lat1)
+    dLon = math.radians(lon2 - lon1)
+    
+    a = math.sin(dLat/2) * math.sin(dLat/2) + math.cos(math.radians(lat1)) \
+        * math.cos(math.radians(lat2)) * math.sin(dLon/2) * math.sin(dLon/2)
+    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
+    distance = R * c
+    return distance
 
 def calculate_score(place, user_data): 
     # (로직 유지)
     style_keywords = {"휴양": ["beach","park"], "관광": ["museum","tour"], "맛집": ["food","meal"]}
     base = float(place.get('rating', 3.0)) * 10
     bonus = 0
-    for style in user_data.get('style', []):
+    # user_data에서 style 정보 사용
+    for style in user_data.get('style', []): 
         if style in str(place.get('category')): bonus += 20
     return min(100, int(base + bonus)), user_data.get('style', [])
 
@@ -141,7 +161,7 @@ def _generate_itinerary_for_theme(theme, duration, all_sights, all_foods, all_ca
         for i in range(duration - 1)
     ]
     
-    # 첫날 출발은 첫 숙소
+    # 첫날 출발은 첫 숙소 (호텔 후보가 없는 경우를 대비하여 None 체크)
     last_night_hotel = hotel_candidates[0] if hotel_candidates else None
     
     days = []
@@ -187,19 +207,23 @@ def _generate_itinerary_for_theme(theme, duration, all_sights, all_foods, all_ca
 
             # --- 동적 시간 계산 ---
             travel_duration_seconds = 0
-            if last_place and last_place.get('lat') and last_place.get('lng'):
+            
+            # 💡 수정: last_place가 유효하고 좌표가 0.0이 아닐 경우에만 이동 시간 계산
+            if last_place and last_place.get('lat', 0.0) != 0.0 and last_place.get('lng', 0.0) != 0.0:
                 prev_place_type_key = last_place.get('type_key', 'default')
                 visit_duration_seconds = VISIT_TIMES.get(prev_place_type_key, VISIT_TIMES['default'])
                 
                 # 다음 장소까지의 이동 시간 (임시로 가장 가까운 후보의 좌표 사용)
+                # ⚠️ 주의: candidates[0]의 좌표가 0.0이면 get_real_duration 함수에서 999999 반환됨
                 if is_korea:
                     travel_duration_seconds = backend.get_real_duration_kakao(
                         last_place['lat'], last_place['lng'], candidates[0]['lat'], candidates[0]['lng'], mode=travel_mode
                     )
                 else:
-                    travel_duration_seconds = backend.get_real_duration_google_bulk(
+                    results = backend.get_real_duration_google_bulk(
                         last_place['lat'], last_place['lng'], [candidates[0]], mode=travel_mode
-                    )[0][0] 
+                    )
+                    travel_duration_seconds = results[0][0] if results else 999999
 
                 if travel_duration_seconds == 999999: travel_duration_seconds = 30 * 60 
                 
@@ -222,7 +246,9 @@ def _generate_itinerary_for_theme(theme, duration, all_sights, all_foods, all_ca
             else:
                 # (1 - Epsilon) 확률로 Cost 기반 최적화 선택
                 selected = candidates[0] 
-                if last_place:
+                
+                # 💡 핵심 수정: last_place가 유효하고 좌표가 0.0이 아닐 경우에만 최적화 시도
+                if last_place and last_place.get('lat', 0.0) != 0.0 and last_place.get('lng', 0.0) != 0.0:
                     candidates.sort(key=lambda p: haversine_distance(last_place['lat'], last_place['lng'], p['lat'], p['lng']))
                     top_5 = candidates[:5]
                     
@@ -301,6 +327,9 @@ def _generate_itinerary_for_theme(theme, duration, all_sights, all_foods, all_ca
     return days
 
 def generate_plans(data, duration):
+    # ⚠️ (수정) data['dest_city']가 빈 문자열일 경우를 대비하여 방어 코드 추가
+    if not data or not data.get('dest_city'): return []
+    
     places = backend.get_places(data['dest_city'])
     if not places: return []
 
@@ -319,7 +348,8 @@ def generate_plans(data, duration):
     # 2. 점수 계산 및 정렬
     scored_places = []
     for p in places:
-        score, tags = calculate_score(p, user_styles)
+        # 💡 핵심 수정: user_styles 대신 data를 사용
+        score, tags = calculate_score(p, data) 
         p['score'] = score
         p['matched_tags'] = tags
         scored_places.append(p)
@@ -330,7 +360,9 @@ def generate_plans(data, duration):
     if '항공' in data.get('transport', []):
         airport_place = {
             "id": "airport_start", "source": "system", "name": f"{data['dest_city']} 공항", 
-            "city": data['dest_city'], "category": "airport", "lat": 33.5113, "lng": 126.493,
+            "city": data['dest_city'], "category": "airport", 
+            # 제주 공항 임시 좌표 사용 (좌표가 0.0이 아니도록 설정)
+            "lat": 33.5113, "lng": 126.493,
             "address": "공항 출발/도착", "rating": 5.0, "img_url": "", "desc": "여행 시작/마무리 지점"
         }
         
@@ -366,6 +398,7 @@ def generate_plans(data, duration):
     final_plans = []
     
     user_pace = data.get('pace', '보통')
+    is_korea = check_is_domestic(data['dest_city'])
 
     for theme in themes:
         days = _generate_itinerary_for_theme(theme, duration, sights, foods, cafes, hotels, airport_place, user_pace, is_korea, data)
@@ -373,32 +406,11 @@ def generate_plans(data, duration):
             "theme": theme['name'], "desc": theme['desc'],
             "score": random.randint(90, 99), "tags": data['style'], "days": days
         })
-        
-        random.shuffle(pool_sights)
-        random.shuffle(pool_foods)
-        
-        days = []
-        
-        # 테마별 스케줄 템플릿 설정
-        if theme['mix_ratio'] == 'food_heavy':
-            schedule_template = [
-                ("11:00", "아점", "food"), ("13:00", "산책", "sight"),
-                ("15:00", "카페", "food"), ("18:00", "저녁", "food"), ("21:00", "숙소", "hotel")
-            ]
-        elif theme['mix_ratio'] == 'relaxed':
-            schedule_template = [
-                ("10:30", "오전 여유", "sight"), ("13:00", "점심", "food"),
-                ("15:30", "오후 관광", "sight"), ("19:00", "저녁", "food"), ("21:00", "숙소", "hotel")
-            ]
-        else:
-            schedule_template = [
-                ("10:00", "오전 관광", "sight"), ("12:30", "점심", "food"),
-                ("15:00", "오후 관광", "sight"), ("18:30", "저녁", "food"), ("21:00", "숙소", "hotel")
-            ]
 
-# travel_logic.py (update_db 함수 수정)
+    return final_plans
 
 def update_db(city, styles):
+    # (이하 update_db 함수는 수정 없이 유지)
     try:
         keywords = []
         

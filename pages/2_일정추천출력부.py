@@ -6,15 +6,19 @@ import streamlit as st
 import streamlit.components.v1 as components 
 import json
 import requests
+import os # os, sys import 추가
+import sys
 
 # [1] 경로 설정 및 모듈 가져오기
 # pages 폴더 안에 있으므로, 부모 디렉토리(루트)를 path에 추가해야 backend와 travel_logic을 찾을 수 있습니다.
 current_dir = os.path.dirname(os.path.abspath(__file__))
 parent_dir = os.path.dirname(current_dir)
-sys.path.append(parent_dir)
+if parent_dir not in sys.path:
+    sys.path.append(parent_dir)
 
 import backend 
-import travel_logic as logic  # [핵심] 분리한 로직 파일 importddd
+import travel_logic as logic  # [핵심] 분리한 로직 파일 import
+from datetime import date # date import 추가
 
 # 2. FastAPI 서버 주소
 GENERATE_API_URL = "http://127.0.0.1:8000/api/v1/generate"
@@ -22,6 +26,7 @@ GENERATE_API_URL = "http://127.0.0.1:8000/api/v1/generate"
 # ==========================================
 # 👇 지도 키 설정
 # ==========================================
+# (이 부분은 수정 없이 유지)
 try:
     KAKAO_MAPS_JS_KEY = st.secrets["KAKAO_JS_KEY"]
     GOOGLE_MAPS_JS_KEY = st.secrets["GOOGLE_JS_KEY"]
@@ -31,6 +36,7 @@ except:
 # ==========================================
 
 # --- [지도 렌더링 함수 유지] ---
+# (render_kakao_map, render_google_map 함수는 수정 없이 유지)
 def render_kakao_map(markers, path):
     if not markers: avg_lat, avg_lng = 33.450701, 126.570667
     else:
@@ -104,11 +110,8 @@ def render_google_map(markers, path):
     <script src="https://maps.googleapis.com/maps/api/js?key={GOOGLE_MAPS_JS_KEY}&callback=initMap" async defer></script>
     </body></html>"""
     return html
+# --- [지도 렌더링 함수 유지 끝] ---
 
-# -------------------------------------------------------------
-# ⚠️ 수정된 부분: 로직 함수들 제거함 (check_is_domestic, generate_plans 등)
-# 대신 logic.함수명() 으로 호출합니다.
-# -------------------------------------------------------------
 
 # --- [CSS 스타일 유지] ---
 st.markdown("""
@@ -140,24 +143,29 @@ st.markdown("""
 # ==========================================
 
 # 1. 데이터 수신 확인
-if "api_result" not in st.session_state:
+if "api_result" not in st.session_state or "form_data" not in st.session_state:
     st.warning("⚠️ 생성된 일정이 없습니다. 메인 페이지에서 먼저 조건을 입력해주세요.")
     if st.button("⬅️ 입력 화면으로 돌아가기"):
         st.switch_page("1_여행조건입력부.py")
     st.stop()
+    
+# 💡 핵심 수정: 사용자 입력 데이터는 'form_data'에서 가져옵니다.
+user_data = st.session_state["form_data"] 
+data_api = st.session_state["api_result"]
+plans = data_api.get("plans", [])
+dest_city = user_data.get("dest_city", "")
 
 # --- 🚀 2. "다시 추천받기" 기능 구현 ---
 if st.button("다른 일정을 다시 추천받기 🔄", type="primary", use_container_width=True):
-    form_data = st.session_state.get("form_data")
-    if form_data:
+    # form_data를 직접 사용
+    if user_data:
         with st.spinner("📡 새로운 일정을 생성 중입니다..."):
             try:
-                response = requests.post(GENERATE_API_URL, json=form_data)
+                response = requests.post(GENERATE_API_URL, json=user_data)
                 
                 if response.status_code == 200:
                     st.session_state["api_result"] = response.json()
                     st.success("✅ 새로운 일정 생성 완료!")
-                    # ❌ 오류 수정: st.experimental_rerun() -> st.rerun()
                     st.rerun() 
                 else:
                     error_detail = response.json().get("detail", "알 수 없는 오류")
@@ -173,70 +181,53 @@ if st.button("다른 일정을 다시 추천받기 🔄", type="primary", use_co
 st.markdown("---")
 
 
-# 2. 데이터 꺼내기
-data = st.session_state["api_result"]
-plans = data.get("plans", [])
-dest_city = st.session_state["form_data"].get("dest_city", "")
-is_korea = is_domestic(dest_city)
-
-# 3. 헤더
-st.title(f"🗺️ {dest_city} 여행 코스 ({len(plans)}개 안)")
-st.caption("FastAPI 서버가 분석한 최적의 동선입니다.")
-
-
+# 2. 데이터 꺼내기 및 계산
 if not plans:
     st.error("조건에 맞는 일정을 찾지 못했습니다.")
 else:
-    data = st.session_state["user_input"]
+    # 날짜 계산
+    start = user_data.get('start_date')
+    if isinstance(start, str): start = date.fromisoformat(start)
+    end = user_data.get('end_date')
+    if isinstance(end, str): end = date.fromisoformat(end)
+    duration = (end - start).days + 1
+    
+    # 💡 핵심 수정: logic 모듈의 check_is_domestic 함수 사용
+    is_korea = logic.check_is_domestic(dest_city)
 
-start = data.get('start_date')
-if isinstance(start, str): start = date.fromisoformat(start)
-end = data.get('end_date')
-if isinstance(end, str): end = date.fromisoformat(end)
-duration = (end - start).days + 1
+    # 3. 헤더
+    st.title(f"🗺️ {dest_city} 여행 코스 ({len(plans)}개 안)")
+    st.caption("FastAPI 서버가 분석한 최적의 동선입니다.")
 
-# [호출 수정] logic 모듈 사용
-is_korea = logic.check_is_domestic(data['dest_city'])
 
-col1, col2 = st.columns([7, 3])
-with col1:
-    location_badge = "🇰🇷 국내여행" if is_korea else "✈️ 해외여행"
-    st.markdown(f"""
-    <div class="main-header">
-        <span class="title-badge">{location_badge}</span>
-        <h1>{data['dest_city']} {duration}일 여행 코스</h1>
-        <p style="color:#666;">{start} ~ {end} ({data['people']}명) · 선호 스타일: <b>{', '.join(data['style'])}</b></p>
-    </div>
-    """, unsafe_allow_html=True)
-with col2:
-    st.markdown("<br>", unsafe_allow_html=True)
-    c_btn1, c_btn2 = st.columns(2)
-    with c_btn1:
-        if st.button("🎲 다시 추천", use_container_width=True):
-            if "plans" in st.session_state: del st.session_state["plans"]
-            st.rerun()
-    with c_btn2:
-        if st.button("🔄 DB 업데이트", use_container_width=True):
-            with st.spinner(f"📡 {data['dest_city']} 데이터 수집 중..."):
-                # [호출 수정] logic 모듈 사용
-                logic.update_db(data['dest_city'], data['style'])
-            
-            if "plans" in st.session_state: del st.session_state["plans"]
-            st.rerun()
+    col1, col2 = st.columns([7, 3])
+    with col1:
+        location_badge = "🇰🇷 국내여행" if is_korea else "✈️ 해외여행"
+        st.markdown(f"""
+        <div class="main-header">
+            <span class="title-badge">{location_badge}</span>
+            <h1>{dest_city} {duration}일 여행 코스</h1>
+            <p style="color:#666;">{start} ~ {end} ({user_data['people']}명) · 선호 스타일: <b>{', '.join(user_data['style'])}</b></p>
+        </div>
+        """, unsafe_allow_html=True)
+    with col2:
+        st.markdown("<br>", unsafe_allow_html=True)
+        c_btn1, c_btn2 = st.columns(2)
+        with c_btn1:
+            if st.button("🎲 다시 추천", use_container_width=True):
+                 if "plans" in st.session_state: del st.session_state["plans"]
+                 st.rerun()
+        with c_btn2:
+            if st.button("🔄 DB 업데이트", use_container_width=True):
+                with st.spinner(f"📡 {dest_city} 데이터 수집 중..."):
+                    # [호출 수정] logic 모듈 사용
+                    logic.update_db(dest_city, user_data['style'])
+                
+                if "plans" in st.session_state: del st.session_state["plans"]
+                st.rerun()
 
-if "plans" not in st.session_state:
-    with st.spinner("🚀 5초 안에 최적의 동선을 계산합니다..."):
-        # [호출 수정] logic 모듈 사용
-        generated = logic.generate_plans(data, duration)
-        
-    if generated:
-        st.session_state["plans"] = generated
-        st.rerun()
-    else:
-        st.warning("⚠️ 저장된 데이터가 없습니다. 우측 상단 '🔄 DB 업데이트' 버튼을 눌러주세요!")
 
-if "plans" in st.session_state:
-    plans = st.session_state["plans"]
+    # 4. 일정 탭 출력 (api_result의 plans 사용)
     tabs = st.tabs([p['theme'] for p in plans])
     
     for i, tab in enumerate(tabs):
@@ -250,37 +241,54 @@ if "plans" in st.session_state:
             """, unsafe_allow_html=True)
             
             day_options = ["전체 동선"] + [f"{d['day']}일차" for d in plan['days']]
-            selected_day_label = st.radio("📅 지도에 표시할 일정", day_options, horizontal=True, key=f"day_sel_{i}", label_visibility="collapsed")
-
-            map_markers = []
-            map_path = []
+            map_col, list_col = st.columns([0.6, 0.4])
             
-            if selected_day_label == "전체 동선":
-                target_days = plan['days']
-            else:
-                target_day_num = int(selected_day_label.replace("일차", ""))
-                target_days = [d for d in plan['days'] if d['day'] == target_day_num]
-            
-            for d in target_days:
-                for p in d['places']:
-                    if p['lat'] and p['lng']:
-                        map_markers.append({"lat": p['lat'], "lng": p['lng'], "title": p['name']})
-                        map_path.append({"lat": p['lat'], "lng": p['lng']})
-            
-            if is_korea:
+            with map_col:
+                selected_day_label = st.radio("📅 지도에 표시할 일정", day_options, horizontal=True, key=f"day_sel_{i}", label_visibility="collapsed")
+                map_markers = []
+                map_path = []
+                
+                if selected_day_label == "전체 동선":
+                    target_days = plan['days']
+                else:
+                    target_day_num = int(selected_day_label.replace("일차", ""))
+                    target_days = [d for d in plan['days'] if d['day'] == target_day_num]
+                
+                for d in target_days:
+                    for p in d['places']:
+                        # p['lat']과 p['lng']의 유효성 검사 추가 (DB에서 누락될 수 있음)
+                        try:
+                            lat = float(p['lat'])
+                            lng = float(p['lng'])
+                            # 좌표가 0.0이 아닌 유효한 값일 때만 지도에 추가 (0.0은 데이터 누락 처리된 값)
+                            if lat != 0.0 and lng != 0.0:
+                                map_markers.append({"lat": lat, "lng": lng, "title": p['name']})
+                                map_path.append({"lat": lat, "lng": lng})
+                        except (ValueError, TypeError):
+                            continue # 좌표가 유효하지 않으면 건너뜀
+                
+                # 지도 선택 UI는 지도 위에 배치
                 map_col1, map_col2 = st.columns([8, 2])
                 with map_col2:
-                    map_type = st.radio("지도 선택", ["Kakao Map", "Google Map"], horizontal=True, label_visibility="collapsed", key=f"map_sel_{i}")
+                    map_type = st.radio("지도 선택", ["Google Map", "Kakao Map"] if is_korea else ["Google Map"], horizontal=True, label_visibility="collapsed", key=f"map_sel_{i}")
                 
-                if map_type == "Google Map":
-                    if GOOGLE_MAPS_JS_KEY: components.html(render_google_map(map_markers, map_path), height=400)
-                    else: st.warning("Google Maps JS Key가 없습니다.")
+                
+                if is_korea:
+                    if map_type == "Kakao Map":
+                        if KAKAO_MAPS_JS_KEY: components.html(render_kakao_map(map_markers, map_path), height=450)
+                        else: st.warning("Kakao Maps JS Key가 없습니다. Google Map을 사용합니다.")
+                    
+                    if map_type == "Google Map" or not KAKAO_MAPS_JS_KEY:
+                        if GOOGLE_MAPS_JS_KEY: components.html(render_google_map(map_markers, map_path), height=450)
+                        else: st.warning("Google Maps JS Key가 없어 지도를 표시할 수 없습니다.")
                 else:
+                    # 해외 지역은 Google Map으로 통일
                     st.caption("🌍 해외 지역은 Google Maps로 표시됩니다.")
-                    components.html(render_google_map(map_markers, map_path), height=450)
+                    if GOOGLE_MAPS_JS_KEY: components.html(render_google_map(map_markers, map_path), height=450)
+                    else: st.warning("Google Maps JS Key가 없어 지도를 표시할 수 없습니다.")
 
-            # (6) 일정 리스트 출력
-            with col_list:
+            # (6) 일정 리스트 출력 (list_col 사용)
+            with list_col:
                 for day in plan['days']:
                     with st.expander(f"📅 Day {day['day']} 상세 일정", expanded=True):
                         for place in day['places']:

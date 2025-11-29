@@ -1,4 +1,4 @@
-# 1_여행조건입력부.py
+# 1_여행조건입력부.py (수정)
 # =========================================================
 # 📌 [Frontend] 상세 여행 조건 입력 및 서버 요청 담당
 # =========================================================
@@ -149,6 +149,16 @@ with st.form("travel_form"):
         )
         english_ok = col_adv3.checkbox("현지 영어 소통 원활 지역", st.session_state["form_data"]["english_ok"])
         
+        # ⚠️ (수정) 고급 설정 내 다른 값들 불러오기
+        walk_minutes_val = st.number_input("도보 이동 시간 (최대, 분)", 10, 120, st.session_state["form_data"]["walk_minutes"])
+        crowd_avoid_val = st.radio("인파 회피 정도", ["낮음", "보통", "높음"], index=["낮음", "보통", "높음"].index(st.session_state["form_data"]["crowd_avoid"]), horizontal=True)
+        temp_range_val = st.slider("선호 온도 범위 (℃)", -10, 40, st.session_state["form_data"]["temp_range"])
+        rainy_ok_val = st.checkbox("우천 시 여행 가능", st.session_state["form_data"]["rainy_ok"])
+        time_constraints_val = st.text_input("시간 제약 사항", st.session_state["form_data"]["time_constraints"])
+        max_transfers_val = st.number_input("최대 환승 횟수 (교통)", 0, 5, st.session_state["form_data"]["max_transfers"])
+        visa_free_val = st.checkbox("비자 불필요 지역 선호", st.session_state["form_data"]["visa_free"])
+
+
     submitted = st.form_submit_button("일정 생성 시작! (Server 전송)", use_container_width=True, type="primary")
 
 # 5. 폼 제출 처리
@@ -166,11 +176,16 @@ if submitted:
         # 🚀 2-1. num_hotels_input의 최신 값을 세션에 저장하여 유지되도록 함
         "num_hotels": num_hotels_input,
         
-        "food_prefs": st.session_state["form_data"]["food_prefs"], "food_allergy_text": st.session_state["form_data"]["food_allergy_text"],
-        "with_kids": with_kids, "stroller": stroller, "barrier_free": st.session_state["form_data"]["barrier_free"], "photo_spot": photo_spot,
+        # ⚠️ (수정) 이 값들은 폼에 없지만, 세션에서 그대로 유지하거나 새 값을 사용
+        "food_prefs": st.session_state["form_data"]["food_prefs"], 
+        "food_allergy_text": st.session_state["form_data"]["food_allergy_text"],
+        "barrier_free": st.session_state["form_data"]["barrier_free"], 
+        
+        # ⚠️ (수정) 폼에서 입력받은 최신 값을 사용
+        "with_kids": with_kids, "stroller": stroller, "photo_spot": photo_spot,
         "keywords": keywords, "seat_pref": seat_pref, "baggage": baggage, "english_ok": english_ok,
-        "walk_minutes": 45, "crowd_avoid": "보통", "temp_range": (15,25), 
-        "rainy_ok": False, "time_constraints": "", "max_transfers": 1, "visa_free": False
+        "walk_minutes": walk_minutes_val, "crowd_avoid": crowd_avoid_val, "temp_range": temp_range_val, 
+        "rainy_ok": rainy_ok_val, "time_constraints": time_constraints_val, "max_transfers": max_transfers_val, "visa_free": visa_free_val
     }
     st.session_state["form_data"].update(updated_data)
 
