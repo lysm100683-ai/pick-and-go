@@ -16,7 +16,7 @@ sys.path.append(root_dir)
 # 이제 루트 경로에 있는 모듈과 상대 모듈을 임포트합니다.
 # travel_logic.py는 루트 디렉토리에 있다고 가정합니다.
 import travel_logic as logic
-import backend 
+import backend_postgres as backend  # PostgreSQL + PostGIS 백엔드
 from .models import TravelCondition, ItineraryResponse, DBUpdateRequest 
 
 # --- FastAPI 앱 초기화 ---
@@ -40,14 +40,14 @@ async def run_in_thread(func, *args):
     return await asyncio.to_thread(func, *args)
 
 
-# 🚀 NEW: 서버 시작 이벤트 (데이터 캐시 선 로드)
+# 🚀 NEW: 서버 시작 이벤트
 @app.on_event("startup")
 def startup_event():
     """
-    서버 시작 시점에 SQLite 데이터를 RAM 캐시로 미리 로드하여 
-    첫 요청 시 발생하는 지연을 제거합니다.
+    서버 시작 시점 초기화
+    backend_postgres는 PostgreSQL 직접 연결을 사용하므로 캐시 로드 불필요
     """
-    backend.force_load_places_cache() 
+    print("[OK] FastAPI Server Started - Using PostgreSQL + PostGIS Backend") 
 
 
 # ================================================================
