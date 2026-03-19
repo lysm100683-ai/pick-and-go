@@ -12,8 +12,8 @@ parent_dir = os.path.dirname(current_dir)
 if parent_dir not in sys.path: # 경로 중복 방지
     sys.path.append(parent_dir)
 
-# backend 모듈 import
-import backend
+# backend_postgres 모듈 import (PostgreSQL + PostGIS 지원)
+import backend_postgres as backend
 
 # --- 설정값 ---
 # 📌 권장 체류 시간 (초 단위)

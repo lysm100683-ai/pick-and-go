@@ -1,2 +1,13 @@
 *.json
 .streamlit/secrets.toml
+.env
+*.db
+*.db-journal
+*.db.backup_*
+__pycache__/
+*.pyc
+*.log
+.env.local
+node_portable/
+frontend/.next/
+frontend/node_modules/

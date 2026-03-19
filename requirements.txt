@@ -4,3 +4,18 @@ requests
 pandas
 gspread
 oauth2client
+
+# FastAPI (기존 사용중)
+fastapi
+uvicorn[standard]
+pydantic
+python-multipart
+
+# PostgreSQL + PostGIS
+psycopg2-binary==2.9.9
+sqlalchemy==2.0.25
+geoalchemy2==0.14.3
+alembic==1.13.1
+
+# Environment management
+python-dotenv==1.0.0
