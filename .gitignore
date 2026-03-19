@@ -7,3 +7,7 @@
 __pycache__/
 *.pyc
 *.log
+.env.local
+node_portable/
+frontend/.next/
+frontend/node_modules/
