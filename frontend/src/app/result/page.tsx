@@ -34,7 +34,7 @@ export default function ResultPage() {
     if (!userData) return;
     setIsRegenerating(true);
     try {
-      const res = await fetch("http://127.0.0.1:8000/api/v1/generate", {
+      const res = await fetch("https://pick-and-go-1.onrender.com/api/v1/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(userData),
@@ -61,7 +61,7 @@ export default function ResultPage() {
     if (!confirm("백그라운드에서 장소 데이터를 새로 수집합니다. 진행하시겠습니까?")) return;
     
     try {
-      const res = await fetch("http://127.0.0.1:8000/api/v1/update-db", {
+      const res = await fetch("https://pick-and-go-1.onrender.com/api/v1/update-db", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ dest_city: userData.dest_city, styles: userData.style }),
