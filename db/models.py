@@ -74,7 +74,7 @@ class MovementCache(Base):
     mode = Column(String(20), nullable=False)  # 'driving', 'transit', 'walking'
     duration_seconds = Column(Integer, nullable=False)
     is_korea = Column(Boolean, default=False)
-    cached_at = Column(TIMESTAMP, server_default=func.now())
+    created_at = Column(TIMESTAMP, server_default=func.now())
     
     __table_args__ = (
         # 중복 API 호출 방지를 위한 복합 인덱스
