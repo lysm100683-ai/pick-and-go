@@ -19,3 +19,6 @@ alembic==1.13.1
 
 # Environment management
 python-dotenv==1.0.0
+
+# Translation
+deep-translator==1.11.4

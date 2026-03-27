@@ -112,27 +112,17 @@ def translate_address(address: str) -> str:
 
 def _google_translate(text: str, target: str = 'ko') -> str:
     """
-    Google Translate 비공식 엔드포인트를 통한 텍스트 번역.
+    deep-translator 라이브러리를 통한 텍스트 번역 (API 키 불필요).
     실패 시 원본 텍스트 반환.
     """
     try:
-        url = "https://translate.googleapis.com/translate_a/single"
-        params = {
-            "client": "gtx",
-            "sl": "auto",
-            "tl": target,
-            "dt": "t",
-            "q": text
-        }
-        resp = requests.get(url, params=params, timeout=3)
-        resp.raise_for_status()
-        result = resp.json()
-        # 응답 구조: [[[번역문, 원본, ...], ...], ...]
-        translated = "".join(part[0] for part in result[0] if part[0])
+        from deep_translator import GoogleTranslator
+        translated = GoogleTranslator(source='auto', target=target).translate(text)
         return translated if translated else text
     except Exception as e:
         logger.debug(f"번역 실패 ({text[:30]}): {e} — 원본 반환")
         return text
+
 
 
 def get_places(city: str, category_filter: str = None, limit: int = 50) -> list:
