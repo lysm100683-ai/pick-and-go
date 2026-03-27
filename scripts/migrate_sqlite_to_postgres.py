@@ -129,7 +129,7 @@ def migrate_movement_cache():
     print(f"   총 {len(rows)}개 캐시 항목 발견")
     
     insert_query = """
-        INSERT INTO movement_cache (origin, destination, mode, duration_seconds, is_korea, cached_at)
+        INSERT INTO movement_cache (origin, destination, mode, duration_seconds, is_korea, created_at)
         VALUES (ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography,
                 ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography,
                 %s, %s, %s, %s)
@@ -159,7 +159,7 @@ def migrate_movement_cache():
                 row[2],  # mode
                 int(row[3]),  # duration_seconds
                 bool(row[4]),  # is_korea
-                datetime.now()  # cached_at
+                datetime.now()  # created_at
             ))
         except Exception as e:
             print(f"   [ERROR] 행 파싱 실패: {e}")

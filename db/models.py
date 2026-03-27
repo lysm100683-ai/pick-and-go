@@ -1,9 +1,8 @@
 # db/models.py - SQLAlchemy ORM 모델 (PostGIS 지원)
-from sqlalchemy import Column, String, DECIMAL, Text, TIMESTAMP, Boolean, Integer, Index
+from sqlalchemy import Column, String, DECIMAL, Text, TIMESTAMP, Boolean, Integer, Index, JSON
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.sql import func
 from geoalchemy2 import Geography
-import uuid
 
 Base = declarative_base()
 
@@ -34,7 +33,7 @@ class Place(Base):
         Index('idx_places_location', 'location', postgresql_using='gist'),
         Index('idx_places_city', 'city'),
         Index('idx_places_category', 'category'),
-        Index('idx_places_rating', 'rating'),
+        Index('idx_places_rating', 'rating', postgresql_ops={'rating': 'DESC'}),
     )
     
     def to_dict(self, session=None):
@@ -74,11 +73,12 @@ class MovementCache(Base):
     mode = Column(String(20), nullable=False)  # 'driving', 'transit', 'walking'
     duration_seconds = Column(Integer, nullable=False)
     is_korea = Column(Boolean, default=False)
-    cached_at = Column(TIMESTAMP, server_default=func.now())
+    created_at = Column(TIMESTAMP, server_default=func.now())
     
     __table_args__ = (
-        # 중복 API 호출 방지를 위한 복합 인덱스
-        Index('idx_movement_cache_lookup', 'origin', 'destination', 'mode'),
+        # geography 타입에는 GiST 인덱스 각각 적용 (create_tables.sql 기준)
+        Index('idx_movement_cache_origin', 'origin', postgresql_using='gist'),
+        Index('idx_movement_cache_destination', 'destination', postgresql_using='gist'),
     )
 
 
@@ -86,16 +86,14 @@ class Reservation(Base):
     """예약 정보 테이블 (Phase 4에서 활용)"""
     __tablename__ = 'reservations'
     
-    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    id = Column(Integer, primary_key=True, autoincrement=True)  # SERIAL (create_tables.sql 기준)
     user_id = Column(String(100), nullable=False)
-    itinerary_data = Column(Text, nullable=False)  # JSON 문자열
+    trip_data = Column(JSON, nullable=False)  # JSONB (create_tables.sql 기준)
     
     status = Column(String(20), nullable=False, default='pending')
-    payment_id = Column(String(100))
-    total_amount = Column(DECIMAL(10, 2))
     
     created_at = Column(TIMESTAMP, server_default=func.now())
-    confirmed_at = Column(TIMESTAMP)
+    updated_at = Column(TIMESTAMP, server_default=func.now(), onupdate=func.now())
     
     __table_args__ = (
         Index('idx_reservations_user_id', 'user_id'),

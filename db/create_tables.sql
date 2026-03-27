@@ -19,6 +19,7 @@ CREATE TABLE IF NOT EXISTS places (
 
 CREATE INDEX IF NOT EXISTS idx_places_location ON places USING gist (location);
 CREATE INDEX IF NOT EXISTS idx_places_city ON places (city);
+CREATE INDEX IF NOT EXISTS idx_places_category ON places (category);
 CREATE INDEX IF NOT EXISTS idx_places_rating ON places (rating DESC);
 
 -- Movement cache table
