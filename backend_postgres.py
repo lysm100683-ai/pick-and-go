@@ -14,11 +14,125 @@ import concurrent.futures
 import requests
 import googlemaps
 import logging
+import re
 
 # 로거 설정
 logger = logging.getLogger(__name__)
 
-# API 키 설정 (Config에서 가져옴)
+
+# ---------------------------------------------------------------------------
+# 1. 영업 상태 확인
+# ---------------------------------------------------------------------------
+def check_place_status(lat: float, lng: float, name: str) -> bool:
+    """
+    Google Places API를 통해 장소의 현재 영업 여부를 확인.
+    API 키 미설정 또는 조회 실패 시 True(통과)를 반환하여 필터링을 우회.
+
+    Args:
+        lat, lng: 장소 좌표
+        name: 장소명 (검색 쿼리용)
+
+    Returns:
+        True = 영업 중 (또는 불명), False = 현재 영업 안 함
+    """
+    if not Config.GMAPS_API_KEY or Config.GMAPS_API_KEY == 'YOUR_GOOGLE_MAPS_API_KEY':
+        return True  # API 키 없으면 모든 장소 통과
+
+    try:
+        gmaps = googlemaps.Client(key=Config.GMAPS_API_KEY)
+
+        # ① Find Place로 place_id 획득
+        find_result = gmaps.find_place(
+            input=f"{name} {lat},{lng}",
+            input_type="textquery",
+            fields=["place_id"],
+            location_bias=f"circle:500@{lat},{lng}"
+        )
+        candidates = find_result.get("candidates", [])
+        if not candidates:
+            return True
+
+        place_id = candidates[0]["place_id"]
+
+        # ② Place Details로 opening_hours 확인
+        details = gmaps.place(
+            place_id=place_id,
+            fields=["opening_hours"]
+        )
+        opening_hours = details.get("result", {}).get("opening_hours", {})
+
+        # open_now 필드가 있으면 그 값 사용, 없으면 통과
+        return opening_hours.get("open_now", True)
+
+    except Exception as e:
+        logger.debug(f"check_place_status 조회 실패 ({name}): {e} — 통과 처리")
+        return True
+
+
+# ---------------------------------------------------------------------------
+# 2. 장소명 번역 (한국어 미포함 텍스트만 번역)
+# ---------------------------------------------------------------------------
+def translate_place_name(name: str) -> str:
+    """
+    장소명을 한국어로 번역. 이미 한국어가 포함된 경우 원본 반환.
+
+    Args:
+        name: 장소명
+
+    Returns:
+        번역된 장소명 (또는 원본)
+    """
+    if not name:
+        return name
+    # 한글 포함 여부 확인 — 포함되면 번역 불필요
+    if re.search(r'[\uAC00-\uD7A3]', name):
+        return name
+    return _google_translate(name, target='ko')
+
+
+# ---------------------------------------------------------------------------
+# 3. 주소 번역 (한국어 미포함 텍스트만 번역)
+# ---------------------------------------------------------------------------
+def translate_address(address: str) -> str:
+    """
+    주소를 한국어로 번역. 이미 한국어가 포함된 경우 원본 반환.
+
+    Args:
+        address: 주소 문자열
+
+    Returns:
+        번역된 주소 (또는 원본)
+    """
+    if not address:
+        return address
+    if re.search(r'[\uAC00-\uD7A3]', address):
+        return address
+    return _google_translate(address, target='ko')
+
+
+def _google_translate(text: str, target: str = 'ko') -> str:
+    """
+    Google Translate 비공식 엔드포인트를 통한 텍스트 번역.
+    실패 시 원본 텍스트 반환.
+    """
+    try:
+        url = "https://translate.googleapis.com/translate_a/single"
+        params = {
+            "client": "gtx",
+            "sl": "auto",
+            "tl": target,
+            "dt": "t",
+            "q": text
+        }
+        resp = requests.get(url, params=params, timeout=3)
+        resp.raise_for_status()
+        result = resp.json()
+        # 응답 구조: [[[번역문, 원본, ...], ...], ...]
+        translated = "".join(part[0] for part in result[0] if part[0])
+        return translated if translated else text
+    except Exception as e:
+        logger.debug(f"번역 실패 ({text[:30]}): {e} — 원본 반환")
+        return text
 
 
 def get_places(city: str, category_filter: str = None, limit: int = 50) -> list:

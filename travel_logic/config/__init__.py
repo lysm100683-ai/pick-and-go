@@ -1,0 +1,33 @@
+# config/__init__.py
+"""
+Configuration 모듈
+"""
+
+from .constants import (
+    VISIT_TIMES,
+    LUNCH_START_RANGE,
+    DINNER_START_RANGE,
+    THEME_WEIGHTS
+)
+
+from .settings import (
+    KOREAN_CITIES,
+    DEFAULT_MIN_RATING,
+    DEFAULT_MIN_HOTEL_RATING,
+    DEFAULT_SIGHTS_PER_DAY,
+    DEFAULT_FOODS_PER_DAY,
+    DEFAULT_CAFES_PER_DAY
+)
+
+__all__ = [
+    'VISIT_TIMES',
+    'LUNCH_START_RANGE',
+    'DINNER_START_RANGE',
+    'THEME_WEIGHTS',
+    'KOREAN_CITIES',
+    'DEFAULT_MIN_RATING',
+    'DEFAULT_MIN_HOTEL_RATING',
+    'DEFAULT_SIGHTS_PER_DAY',
+    'DEFAULT_FOODS_PER_DAY',
+    'DEFAULT_CAFES_PER_DAY'
+]
