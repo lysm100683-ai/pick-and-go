@@ -70,58 +70,52 @@ def check_place_status(lat: float, lng: float, name: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# 2. 장소명 번역 (한국어 미포함 텍스트만 번역)
+# 2. 장소명 — 영문 상호명/장소명은 원본 그대로 유지
 # ---------------------------------------------------------------------------
 def translate_place_name(name: str) -> str:
     """
-    장소명을 한국어로 번역. 이미 한국어가 포함된 경우 원본 반환.
-
-    Args:
-        name: 장소명
-
-    Returns:
-        번역된 장소명 (또는 원본)
+    장소명은 번역하지 않고 원본 반환.
+    (영문 상호명·브랜드명은 원문 유지 정책)
     """
-    if not name:
-        return name
-    # 한글 포함 여부 확인 — 포함되면 번역 불필요
-    if re.search(r'[\uAC00-\uD7A3]', name):
-        return name
-    return _google_translate(name, target='ko')
+    return name if name else name
 
 
 # ---------------------------------------------------------------------------
-# 3. 주소 번역 (한국어 미포함 텍스트만 번역)
+# 3. 주소 한국어 변환 — Google Geocoding API(language=ko) 우선, fallback deep-translator
 # ---------------------------------------------------------------------------
 def translate_address(address: str) -> str:
     """
-    주소를 한국어로 번역. 이미 한국어가 포함된 경우 원본 반환.
-
-    Args:
-        address: 주소 문자열
-
-    Returns:
-        번역된 주소 (또는 원본)
+    영문 주소를 한국식 표기로 변환.
+    - 이미 한국어 포함 시 원본 반환
+    - Google Geocoding API(language=ko)로 공식 한국어 주소 획득
+    - API 키 없거나 실패 시 deep-translator로 텍스트 번역
     """
     if not address:
         return address
+    # 이미 한국어 포함이면 그대로
     if re.search(r'[\uAC00-\uD7A3]', address):
         return address
-    return _google_translate(address, target='ko')
 
+    # 1순위: Google Geocoding API로 한국어 주소 획득
+    if Config.GMAPS_API_KEY and Config.GMAPS_API_KEY != 'YOUR_GOOGLE_MAPS_API_KEY':
+        try:
+            gmaps = googlemaps.Client(key=Config.GMAPS_API_KEY)
+            results = gmaps.geocode(address, language='ko')
+            if results:
+                return results[0].get('formatted_address', address)
+        except Exception as e:
+            logger.debug(f"Geocoding 주소 변환 실패 ({address[:30]}): {e}")
 
-def _google_translate(text: str, target: str = 'ko') -> str:
-    """
-    deep-translator 라이브러리를 통한 텍스트 번역 (API 키 불필요).
-    실패 시 원본 텍스트 반환.
-    """
+    # 2순위: deep-translator fallback
     try:
         from deep_translator import GoogleTranslator
-        translated = GoogleTranslator(source='auto', target=target).translate(text)
-        return translated if translated else text
+        translated = GoogleTranslator(source='auto', target='ko').translate(address)
+        return translated if translated else address
     except Exception as e:
-        logger.debug(f"번역 실패 ({text[:30]}): {e} — 원본 반환")
-        return text
+        logger.debug(f"번역 실패 ({address[:30]}): {e} — 원본 반환")
+        return address
+
+
 
 
 
