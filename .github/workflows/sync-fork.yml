@@ -5,14 +5,27 @@ on:
     - cron: '0 * * * *'  # 매시간 자동 실행
   workflow_dispatch:       # 수동 실행 버튼
 
+permissions:
+  contents: write          # main 브랜치 push 권한
+
 jobs:
   sync:
     runs-on: ubuntu-latest
     steps:
-      - name: Sync fork
-        uses: aormsby/Fork-Sync-With-Upstream-action@v3.4
+      - name: Checkout
+        uses: actions/checkout@v4
         with:
-          upstream_sync_repo: lysm100683-ai/pick-and-go
-          upstream_sync_branch: main
-          target_sync_branch: main
-          target_repo_token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Sync from upstream
+        run: |
+          git remote add upstream https://github.com/lysm100683-ai/pick-and-go.git
+          git fetch upstream main
+          git merge upstream/main --no-edit
+          git push origin main
