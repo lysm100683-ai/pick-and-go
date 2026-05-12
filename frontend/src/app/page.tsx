@@ -64,6 +64,16 @@ export default function Home() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMsg, setErrorMsg]         = useState("");
   const [genTime, setGenTime]           = useState<string | null>(null);
+  const [elapsed, setElapsed]           = useState(0); // 로딩 중 경과 시간(초)
+
+  // isSubmitting 상태 변화 시 타이머 시작/종료
+  useEffect(() => {
+    if (isSubmitting) {
+      setElapsed(0);
+      const id = setInterval(() => setElapsed(prev => +(prev + 0.1).toFixed(1)), 100);
+      return () => clearInterval(id);
+    }
+  }, [isSubmitting]);
 
   const handleChange = (e: any) => {
     const { name, value, type, checked } = e.target;
@@ -483,16 +493,34 @@ export default function Home() {
             </div>
           </section>
           <button type="submit" disabled={isSubmitting}
-            className="w-full relative group overflow-hidden rounded-2xl bg-blue-600 p-1 transition-all hover:shadow-2xl hover:shadow-blue-500/40 transform hover:-translate-y-1">
+            className={`w-full relative group overflow-hidden rounded-2xl p-1 transition-all transform hover:-translate-y-1 ${
+              isSubmitting
+                ? elapsed > 5
+                  ? "bg-orange-500 hover:shadow-2xl hover:shadow-orange-500/40"
+                  : "bg-blue-600 hover:shadow-2xl hover:shadow-blue-500/40"
+                : "bg-blue-600 hover:shadow-2xl hover:shadow-blue-500/40"
+            }`}>
             <div className="relative px-8 py-5 bg-white/10 backdrop-blur-sm rounded-[12px] flex items-center justify-center gap-3">
               {isSubmitting ? (
-                <div className="w-6 h-6 border-3 border-white/30 border-t-white rounded-full animate-spin"></div>
+                <>
+                  <div className="w-6 h-6 border-3 border-white/30 border-t-white rounded-full animate-spin" />
+                  <span className="text-xl font-bold text-white tracking-wide">
+                    AI 일정 생성 중...
+                  </span>
+                  {/* 실시간 경과 시간 */}
+                  <span className={`text-lg font-black tabular-nums ${
+                    elapsed > 5 ? "text-orange-200" : "text-white/80"
+                  }`}>
+                    {elapsed.toFixed(1)}s
+                    {elapsed > 5 && <span className="ml-1 text-sm">⚠️</span>}
+                  </span>
+                </>
               ) : (
-                <Plane className="w-6 h-6 text-white group-hover:translate-x-1 group-hover:-translate-y-1 transition-transform" />
+                <>
+                  <Plane className="w-6 h-6 text-white group-hover:translate-x-1 group-hover:-translate-y-1 transition-transform" />
+                  <span className="text-xl font-bold text-white tracking-wide">완벽한 여행 일정 만들기</span>
+                </>
               )}
-              <span className="text-xl font-bold text-white tracking-wide">
-                {isSubmitting ? "AI가 맞춤 여행 일정을 생성하고 있습니다..." : "완벽한 여행 일정 만들기"}
-              </span>
             </div>
           </button>
           
