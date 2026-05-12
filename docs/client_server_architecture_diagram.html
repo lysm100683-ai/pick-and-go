@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Pick & Go 통신 아키텍처 설계도</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Pretendard:wght@300;400;600;700;800&display=swap');
+    
+    body {
+        font-family: 'Pretendard', -apple-system, sans-serif;
+        background-color: #f8fafc;
+        margin: 0; padding: 40px;
+        color: #1a1a1a;
+        display: flex; flex-direction: column; align-items: center;
+    }
+    .header {
+        text-align: center; margin-bottom: 24px; width: 100%; max-width: 1400px;
+    }
+    .header h1 {
+        font-size: 32px; font-weight: 800; margin: 0 0 12px 0; color: #0f172a;
+    }
+    .header p {
+        font-size: 16px; color: #475569; margin: 0; line-height: 1.5;
+    }
+    .canvas {
+        background: #ffffff;
+        box-shadow: 0 20px 25px -5px rgba(0,0,0,0.05), 0 8px 10px -6px rgba(0,0,0,0.01);
+        border-radius: 16px; border: 1px solid #e2e8f0;
+        padding: 40px;
+        width: 100%; max-width: 1450px;
+        overflow-x: auto;
+    }
+    .legend {
+        display: flex; justify-content: center; gap: 24px;
+        margin-top: 30px; font-size: 14px; font-weight: 600;
+        background: #f1f5f9; padding: 16px; border-radius: 12px;
+    }
+    .l-item { display: flex; align-items: center; gap: 8px; }
+    .l-color { width: 18px; height: 18px; border-radius: 5px; border: 2px solid; }
+    .c-client { background: #e0f2fe; border-color: #0284c7; color: #075985; }
+    .c-server { background: #dcfce7; border-color: #16a34a; color: #14532d; }
+    .c-db     { background: #f3e8ff; border-color: #9333ea; color: #581c87; }
+    .c-req    { background: #fff1f2; border-color: #e11d48; color: #be123c; }
+
+  </style>
+</head>
+<body>
+
+<div class="header">
+  <h1>Pick &amp; Go — 클라이언트-서버 4계층 통신 아키텍처</h1>
+  <p>메인 파이프라인(4차 설계도)을 물리적 통신 계층(Client, Network, Server, DB)으로 재배포하여,<br>사용자 행동과 백엔드 처리 간의 HTTP 요청/응답 구조를 명확히 보여줍니다.</p>
+</div>
+
+<div class="canvas">
+  <div class="mermaid">
+    %%{init: {'theme': 'base', 'themeVariables': { 'fontFamily': 'Pretendard', 'primaryColor': '#ffffff', 'lineColor': '#64748b' }}}%%
+    flowchart LR
+    
+    %% --- Styles ---
+    classDef client fill:#f0f9ff,stroke:#0284c7,stroke-width:2px,color:#0369a1,font-weight:700
+    classDef server fill:#f0fdf4,stroke:#16a34a,stroke-width:2px,color:#15803d,font-weight:700
+    classDef db fill:#faf5ff,stroke:#9333ea,stroke-width:2px,color:#6b21a8,font-weight:700
+    classDef comm fill:#fff1f2,stroke:#e11d48,stroke-width:2px,color:#be123c,font-weight:700,stroke-dasharray: 4 4
+    classDef blank fill:none,stroke:none,color:none
+    
+    %% --- Client Subgraph ---
+    subgraph Client ["🌐 Client (프론트엔드 - Vercel)"]
+        direction TB
+        C_In((👦 사용자 웹 접속<br>조건 입력)):::client
+        
+        subgraph ViewUI [지도/일정 렌더링 영역]
+          C_Map[지도 및 동선 시각화]:::client
+          C_Detail[상세 일정 표시부]:::client
+        end
+        
+        C_Mod((👦 상세 일정 변경<br>및 직항 선택)):::client
+        C_Print[최종 예약 결과 출력]:::client
+        
+        C_In ~~~ ViewUI
+        C_Map --> C_Detail
+        ViewUI ~~~ C_Mod
+        C_Mod ~~~ C_Print
+    end
+
+    %% --- Network Communication Nodes ---
+    %% Placing them in between Client and Server to simulate a network boundary
+    REQ1{{"HTTP POST Request<br>[여행 조건 JSON 전송]"}}:::comm
+    RES1{{"HTTP 200 Response<br>[일정 추천 플랜 반환]"}}:::comm
+    REQ2{{"HTTP POST Request<br>[예약 요청 JSON 전송]"}}:::comm
+    RES2{{"HTTP 200 Response<br>[최종 예약 결과 반환]"}}:::comm
+
+    %% --- Server Subgraph ---
+    subgraph Server ["⚙️ Server (백엔드 API - Render)"]
+        direction TB
+        
+        subgraph Pipeline1 ["💡 일정 생성 파이프라인 (추천 코어 엔진)"]
+            S_Val[1. 입력값 유효성 검증부]:::server
+            S_Pre1[2. 기본 전처리부]:::server
+            S_Route[3. 조건 전달부]:::server
+            S_Pre2[4. 조건 전처리부]:::server
+            S_Gen[5. 여행 일정 생성부]:::server
+            S_Fmt[6. 최종 포맷 형성부]:::server
+            
+            S_Val --> S_Pre1 --> S_Route --> S_Pre2 --> S_Gen --> S_Fmt
+        end
+        
+        subgraph Pipeline2 ["🎟️ 예약 연동 파이프라인 (Saga)"]
+            S_Sel[1. 일정 선택 처리부]:::server
+            S_Res1[2. 예약 검증부]:::server
+            S_Res2[3. 외부 예약 연동 관리부]:::server
+            S_Res3[4. 예약 확정 검증부]:::server
+            S_Res4[5. 예약 정보 저장부]:::server
+            S_Res5[6. 예약 결과 안내부]:::server
+            
+            S_Sel --> S_Res1 --> S_Res2 --> S_Res3 --> S_Res4 --> S_Res5
+        end
+
+        subgraph Background ["🔄 비동기 인제스천"]
+            S_Cache[이동 캐시 관리부]:::server
+            S_SDB[장소 데이터 수집부]:::server
+            S_Cache --> S_SDB
+        end
+
+        Background ~~~ Pipeline1
+        Pipeline1 ~~~ Pipeline2
+    end
+
+    %% --- External / Database Subgraph ---
+    subgraph Data ["🗄️ Database & External System"]
+        direction TB
+        DB_Plc[("PostgreSQL/PostGIS<br>장소 DB (Supabase)")]:::db
+        DB_Res[("PostgreSQL<br>예약 DB (Supabase)")]:::db
+        EXT[{"외부 B2B 예약 API<br>(Amadeus, Booking 등)"}]:::db
+    end
+
+    %% ==========================================
+    %% CONNECTION FLOWS
+    %% ==========================================
+
+    %% 1. Input Flow
+    C_In ==> REQ1
+    REQ1 ==> S_Val
+    
+    %% 2. DB Interaction
+    S_SDB --"장소 크롤링/적재"--> DB_Plc
+    DB_Plc --"최적 장소 쿼리반환"--> S_Pre2
+    
+    %% 3. First Output Flow
+    S_Fmt ==> RES1
+    RES1 ==> C_Map
+    
+    %% 4. Modification / Reservation Flow
+    C_Mod ==> REQ2
+    REQ2 ==> S_Sel
+    
+    %% 5. External Reservation Call
+    S_Res2 == "Server-to-Server API" ==> EXT
+    EXT -. "Callback (예약 확정)" .-> S_Res2
+    
+    %% 6. Reservation Save
+    S_Res4 -- "트랜잭션 저장 (ACID)" --> DB_Res
+    
+    %% 7. Final Output Flow
+    S_Res5 ==> RES2
+    RES2 ==> C_Print
+  </div>
+
+  <div class="legend">
+    <div class="l-item"><div class="l-color c-client"></div> <span>Client (프론트엔드 브라우저/사용자 영역)</span></div>
+    <div class="l-item"><div class="l-color c-req"></div> <span>Network (HTTP 요청/응답 통신)</span></div>
+    <div class="l-item"><div class="l-color c-server"></div> <span>Server (백엔드 파이프라인)</span></div>
+    <div class="l-item"><div class="l-color c-db"></div> <span>DB / B2B API (외부 연동 영역)</span></div>
+  </div>
+</div>
+
+<script type="module">
+  import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs';
+  mermaid.initialize({ 
+      startOnLoad: true, 
+      flowchart: { curve: 'linear' }
+  });
+</script>
+
+</body>
+</html>

@@ -1,8 +1,9 @@
 # app/main.py (최종 수정: 모듈 경로 및 Startup Cache 적용)
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Response
 from fastapi.middleware.cors import CORSMiddleware
 from datetime import date
 import asyncio
+import time
 import sys
 import os
 
@@ -17,7 +18,15 @@ sys.path.append(root_dir)
 # travel_logic.py는 루트 디렉토리에 있다고 가정합니다.
 import travel_logic as logic
 import backend_postgres as backend  # PostgreSQL + PostGIS 백엔드
-from .models import TravelCondition, ItineraryResponse, DBUpdateRequest 
+from .models import (
+    TravelCondition, ItineraryResponse, DBUpdateRequest,
+    ReservationRequest, ReservationResponse, ReservationFailResponse,
+)
+from .reservation.sub1_validator import validate_reservation, ReservationValidationError
+from .reservation.sub2_external  import book_parallel, BookingFailedError
+from .reservation.sub3_confirmer import confirm_reservation, ConfirmationError
+from .reservation.sub4_storage   import save_reservation, StorageError
+from .reservation.sub5_notifier  import build_success_response, build_fail_response, send_confirmation_notification
 
 # --- FastAPI 앱 초기화 ---
 app = FastAPI(
@@ -61,35 +70,40 @@ def health_check():
 
 # 1. 일정 생성 API (핵심)
 @app.post("/api/v1/generate", response_model=ItineraryResponse, summary="여행 일정 생성")
-async def generate_itinerary(req: TravelCondition):
+async def generate_itinerary(req: TravelCondition, response: Response):
+    t_start = time.perf_counter()
     try:
         d_start = date.fromisoformat(req.start_date)
-        d_end = date.fromisoformat(req.end_date)
+        d_end   = date.fromisoformat(req.end_date)
         duration = (d_end - d_start).days + 1
-        
+
         if duration <= 0:
             raise HTTPException(status_code=400, detail="종료일이 시작일보다 빠릅니다.")
 
         input_data = req.model_dump()
-
         print(f"🔄 [Processing] {req.dest_city} {duration}일 일정 생성 시작...")
-        
-        # 🚀 run_in_thread 사용 유지 (블로킹 방지)
-        # travel_logic.generate_plans 호출
+
         plans = await run_in_thread(logic.generate_plans, input_data, duration)
+
+        elapsed = time.perf_counter() - t_start
+        # 응답 헤더에 소요 시간 포함 (목표 사양 ≤ 5초 검증용)
+        response.headers["X-Generation-Time"] = f"{elapsed:.3f}s"
+
+        if elapsed > 5.0:
+            print(f"⚠️  [SLOW] 일정 생성 {elapsed:.3f}s — 목표 ≤5초 초과")
+        else:
+            print(f"✅ [Success] {len(plans) if plans else 0}개 테마 일정 생성 완료 ({elapsed:.3f}s)")
 
         if not plans:
             return ItineraryResponse(plans=[])
-
-        print(f"✅ [Success] {len(plans)}개 테마 일정 생성 완료.")
         return ItineraryResponse(plans=plans)
 
     except Exception as e:
-        print(f"❌ [Error] 일정 생성 실패: {e}")
-        # 오류 상세 정보가 너무 길면 잘라서 출력
+        elapsed = time.perf_counter() - t_start
+        print(f"❌ [Error] 일정 생성 실패 ({elapsed:.3f}s): {e}")
         detail_str = str(e)
         if len(detail_str) > 500:
-             detail_str = detail_str[:500] + "..."
+            detail_str = detail_str[:500] + "..."
         raise HTTPException(status_code=500, detail=detail_str)
 
 
@@ -105,15 +119,92 @@ async def trigger_db_update(req: DBUpdateRequest, background_tasks: BackgroundTa
     }
 
 
-# 3. 예약 확정 API (15초 스펙 달성용)
-@app.post("/api/v1/reservation", summary="예약 요청 및 확정")
-async def create_reservation(place_name: str, user_id: str):
-    await asyncio.sleep(2) 
-    
-    reservation_id = f"RES_{user_id}_{place_name[:5]}_{date.today()}"
-    
-    return {
-        "status": "confirmed",
-        "reservation_id": reservation_id,
-        "message": f"'{place_name}' 예약이 확정되었습니다. (영수증이 이메일로 발송됩니다.)"
-    }
+# 3. 예약 확정 API — Sub1~5 5단계 파이프라인
+@app.post(
+    "/api/v1/reservation",
+    summary="예약 요청 및 확정 (Sub1~5 파이프라인)",
+    description="예약 검증 → 외부 병렬 예약 → 확정 검증 → DB 저장 → 결과 안내 순으로 처리",
+)
+async def create_reservation(
+    req: ReservationRequest,
+    background_tasks: BackgroundTasks,
+    response: Response,
+):
+    """
+    설계도 5단계 파이프라인:
+      Sub1: 예약 검증부
+      Sub2: 외부 예약 연동 (항공 + 숙소 병렬)
+      Sub3: 예약 확정 검증
+      Sub4: DB 저장 (트랜잭션)
+      Sub5: 결과 안내 (성공/실패 응답)
+    """
+    t_start = time.perf_counter()
+    print(f"\n{'='*50}")
+    print(f"[Reservation] 🎫 예약 요청 수신 — user:{req.user_id}, {req.dep_city}→{req.dest_city}")
+    print(f"{'='*50}")
+
+    # ── Sub 1: 예약 검증부 ─────────────────────────────────────
+    try:
+        validated_context = await validate_reservation(req)
+    except ReservationValidationError as e:
+        return build_fail_response(
+            error_code=e.code,
+            error_message=e.message,
+            retryable=e.retryable,
+        )
+
+    # ── Sub 2: 외부 예약 연동 관리부 (병렬) ───────────────────
+    try:
+        booking_results = await book_parallel(validated_context)
+    except BookingFailedError as e:
+        return build_fail_response(
+            error_code="BOOKING_FAILED",
+            error_message=e.message,
+            retryable=e.retryable,
+            failed_items=e.failed_items,
+        )
+    except Exception as e:
+        return build_fail_response(
+            error_code="EXTERNAL_API_ERROR",
+            error_message=f"외부 예약 서비스 오류: {str(e)}",
+            retryable=True,
+        )
+
+    # ── Sub 3: 예약 확정 검증 ─────────────────────────────────
+    try:
+        confirmed_reservation = await confirm_reservation(validated_context, booking_results)
+    except ConfirmationError as e:
+        return build_fail_response(
+            error_code=e.code,
+            error_message=e.message,
+            retryable=False,
+        )
+
+    # ── Sub 4: 예약 정보 저장 (DB 트랜잭션) ───────────────────
+    try:
+        saved_id = await save_reservation(confirmed_reservation)
+    except StorageError as e:
+        return build_fail_response(
+            error_code=e.code,
+            error_message=e.message,
+            retryable=True,
+        )
+
+    # ── Sub 5: 결과 안내 ──────────────────────────────────────
+    # 이메일/SMS 발송은 Back그라운드로 분리 → 응답 시간 단축 (SRS M-12 준수)
+    background_tasks.add_task(
+        send_confirmation_notification,
+        saved_id,
+        req.user_id,
+        req.dest_city,
+    )
+
+    result = build_success_response(confirmed_reservation, saved_id)
+    elapsed = time.perf_counter() - t_start
+    response.headers["X-Reservation-Time"] = f"{elapsed:.3f}s"
+
+    if elapsed > 15.0:
+        print(f"⚠️  [SLOW] 예약 확정 {elapsed:.3f}s — 목표 ≤15초 초과")
+    else:
+        print(f"[Reservation] ✅ 완료 — reservation_id:{saved_id} ({elapsed:.3f}s)")
+    return result

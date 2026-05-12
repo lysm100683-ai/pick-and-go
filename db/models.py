@@ -1,5 +1,5 @@
-# db/models.py - SQLAlchemy ORM 모델 (PostGIS 지원)
-from sqlalchemy import Column, String, DECIMAL, Text, TIMESTAMP, Boolean, Integer, Index, JSON
+from sqlalchemy import Column, String, DECIMAL, Text, TIMESTAMP, Boolean, Integer, Index, JSON, Numeric, ForeignKey
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.sql import func
 from geoalchemy2 import Geography
@@ -82,20 +82,78 @@ class MovementCache(Base):
     )
 
 
+import uuid
+
+
 class Reservation(Base):
-    """예약 정보 테이블 (Phase 4에서 활용)"""
+    """
+    예약 기본 정보 테이블 (Sub 3 확정 검증 결과 저장)
+    설계: reservations — 예약 ID, 사용자, 상태, 총 금액
+    """
     __tablename__ = 'reservations'
-    
-    id = Column(Integer, primary_key=True, autoincrement=True)  # SERIAL (create_tables.sql 기준)
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id = Column(String(100), nullable=False)
-    trip_data = Column(JSON, nullable=False)  # JSONB (create_tables.sql 기준)
-    
-    status = Column(String(20), nullable=False, default='pending')
-    
+    itinerary_id = Column(String(100))              # 처리부에서 넘어온 일정 식별자
+    trip_data = Column(JSONB, nullable=False)        # 일정 원본 데이터 (JSONB)
+    status = Column(String(20), nullable=False, default='pending')  # pending/confirmed/failed/cancelled
+    total_amount = Column(Numeric(12, 2), default=0) # 최종 결제 금액
+    currency = Column(String(10), default='KRW')
+    people = Column(Integer, default=1)
     created_at = Column(TIMESTAMP, server_default=func.now())
     updated_at = Column(TIMESTAMP, server_default=func.now(), onupdate=func.now())
-    
+
     __table_args__ = (
         Index('idx_reservations_user_id', 'user_id'),
         Index('idx_reservations_status', 'status'),
+        Index('idx_reservations_created_at', 'created_at'),
+    )
+
+
+class ReservationItem(Base):
+    """
+    예약 세부 항목 테이블 (항공 or 숙소 각 1행)
+    설계: reservation_items — 파트너별 예약 결과
+    """
+    __tablename__ = 'reservation_items'
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    reservation_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey('reservations.id', ondelete='CASCADE'),
+        nullable=False
+    )
+    item_type = Column(String(20), nullable=False)   # 'flight' | 'hotel'
+    partner_name = Column(String(100))               # 'amadeus', 'booking_com' 등
+    partner_booking_id = Column(String(200))         # 파트너사 예약 번호
+    status = Column(String(20), nullable=False, default='pending')  # confirmed/failed/cancelled
+    amount = Column(Numeric(12, 2), default=0)
+    currency = Column(String(10), default='KRW')
+    details = Column(JSONB)                          # 항공편명, 좌석, 체크인 등 상세
+    created_at = Column(TIMESTAMP, server_default=func.now())
+
+    __table_args__ = (
+        Index('idx_res_items_reservation_id', 'reservation_id'),
+        Index('idx_res_items_type', 'item_type'),
+    )
+
+
+class ReservationLog(Base):
+    """
+    예약 처리 이력 테이블 (Sub 4 저장 — 히스토리)
+    설계: reservation_logs — 성공/실패 모든 이벤트 기록
+    """
+    __tablename__ = 'reservation_logs'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    reservation_id = Column(UUID(as_uuid=True), ForeignKey('reservations.id', ondelete='SET NULL'))
+    action_type = Column(String(50), nullable=False)  # 'attempt'|'success'|'failure'|'cancel'|'rollback'
+    sub_system = Column(String(30))                   # 'sub1'~'sub5'
+    result = Column(String(20))                       # 'ok' | 'error'
+    payload = Column(JSONB)                           # 상세 이벤트 데이터
+    created_at = Column(TIMESTAMP, server_default=func.now())
+
+    __table_args__ = (
+        Index('idx_res_logs_reservation_id', 'reservation_id'),
+        Index('idx_res_logs_action_type', 'action_type'),
     )

@@ -41,9 +41,7 @@ export default function Home() {
     // Advanced (항공/수하물/기타)
     seat_pref: "무관",
     baggage: "기내만",
-    keywords: "", // 특별 액티비티 요구나 추가 설명에 사용
-    
-    // 이하는 고정 또는 기본값
+    keywords: "",
     english_ok: false,
     walk_minutes: 45,
     crowd_avoid: "보통",
@@ -52,10 +50,20 @@ export default function Home() {
     time_constraints: "",
     max_transfers: 1,
     visa_free: false,
+
+    // Step 5: 추가 입력형 조건 (입력형 20개 달성)
+    trip_purpose: "",
+    preferred_airline: "",
+    arrival_time_pref: "",
+    departure_time_pref: "",
+    interest_places: "",
+    daily_budget_manwon: 30,
+    notes: "",
   });
 
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [errorMsg, setErrorMsg] = useState("");
+  const [errorMsg, setErrorMsg]         = useState("");
+  const [genTime, setGenTime]           = useState<string | null>(null);
 
   const handleChange = (e: any) => {
     const { name, value, type, checked } = e.target;
@@ -86,17 +94,20 @@ export default function Home() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(formData),
       });
-      
+
       if (!res.ok) {
         const errData = await res.json().catch(() => ({}));
         throw new Error(errData.detail || `서버 에러 (${res.status})`);
       }
-      
+
       const data = await res.json();
-      
+      // 응답 헤더에서 생성 시간 읽기 (≤5초 목표 사양 검증)
+      const t = res.headers.get("X-Generation-Time");
+      if (t) setGenTime(t);
+
       localStorage.setItem("api_result", JSON.stringify(data));
-      localStorage.setItem("form_data", JSON.stringify(formData));
-      
+      localStorage.setItem("form_data",  JSON.stringify(formData));
+
       router.push("/result");
       
     } catch (err: any) {
@@ -359,7 +370,8 @@ export default function Home() {
 
             <div className="mb-8 space-y-2">
               <label className="text-sm font-semibold text-slate-700">알러지 또는 못 드시는 음식 (선택사항)</label>
-              <input type="text" name="food_allergy_text" value={formData.food_allergy_text} onChange={handleChange} 
+              <input type="text" name="food_allergy_text" value={formData.food_allergy_text} onChange={handleChange}
+                maxLength={1000}
                 placeholder="예: 땅콩 알러지, 고수 빼주세요, 갑각류 알러지가 있어요"
                 className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-rose-500 text-slate-700 placeholder-slate-400" />
             </div>
@@ -401,14 +413,75 @@ export default function Home() {
               <label className="text-sm font-semibold text-slate-700 flex items-center gap-2">
                 <Info className="w-4 h-4 text-slate-400" /> 기타 특별하게 원하시는 액티비티나 요구사항을 자유롭게 적어주세요.
               </label>
-              <textarea name="keywords" value={formData.keywords} onChange={handleChange} 
+              <textarea name="keywords" value={formData.keywords} onChange={handleChange}
+                maxLength={1000}
                 rows={3} placeholder="예: 첫날엔 무조건 스쿠버다이빙, 부모님 생신 기념이라 프라이빗 요트 투어를 원해요."
                 className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-rose-500 text-slate-700 placeholder-slate-400 resize-none break-keep" />
             </div>
 
           </section>
 
-          {/* Submit Button */}
+          {/* Section 5: Additional Requests */}
+          <section className="bg-white/80 backdrop-blur-xl border border-white rounded-3xl p-6 md:p-8 shadow-xl shadow-slate-200/50">
+            <h2 className="text-2xl font-bold flex items-center gap-3 mb-6 text-slate-800">
+              <Info className="w-6 h-6 text-teal-500" /> 5. 추가 요청 사항
+            </h2>
+            <p className="text-sm text-slate-500 mb-6">입력형 조건 20개 효주 상세 항목입니다. 선택 사항이지만 더 정확한 일정 생성에 도움이 됩니다.</p>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+              <div className="space-y-2">
+                <label className="text-sm font-semibold text-slate-700">✈️ 여행 목적 / 테마</label>
+                <input type="text" name="trip_purpose"
+                  value={formData.trip_purpose} onChange={handleChange}
+                  placeholder="예) 신혼여행, 가족 추억 여행, 소울리쳐"
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-teal-500 text-slate-700 placeholder-slate-400" />
+              </div>
+              <div className="space-y-2">
+                <label className="text-sm font-semibold text-slate-700">항공기 선호 항공사</label>
+                <input type="text" name="preferred_airline"
+                  value={formData.preferred_airline} onChange={handleChange}
+                  placeholder="예) 대한항공, 아시아나 (없으면 빈칸)"
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-teal-500 text-slate-700 placeholder-slate-400" />
+              </div>
+              <div className="space-y-2">
+                <label className="text-sm font-semibold text-slate-700">🕒 도착 희망 시간대</label>
+                <input type="text" name="arrival_time_pref"
+                  value={formData.arrival_time_pref} onChange={handleChange}
+                  placeholder="예) 오전 10시 이전"
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-teal-500 text-slate-700 placeholder-slate-400" />
+              </div>
+              <div className="space-y-2">
+                <label className="text-sm font-semibold text-slate-700">🕒 출발 희망 시간대</label>
+                <input type="text" name="departure_time_pref"
+                  value={formData.departure_time_pref} onChange={handleChange}
+                  placeholder="예) 오후 3시 이후"
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-teal-500 text-slate-700 placeholder-slate-400" />
+              </div>
+            </div>
+            <div className="space-y-2 mb-6">
+              <label className="text-sm font-semibold text-slate-700">📍 꼭 가보고 싶은 장소 / 명소</label>
+              <input type="text" name="interest_places"
+                value={formData.interest_places} onChange={handleChange}
+                maxLength={500}
+                placeholder="예) 성산일출, 하쏼이 인구여, OO 맛집 거리"
+                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-teal-500 text-slate-700 placeholder-slate-400" />
+            </div>
+            <div className="space-y-2 mb-6">
+              <label className="text-sm font-semibold text-slate-700">💰 하루 자유 예산 (만원, 숙소 제외)</label>
+              <input type="number" name="daily_budget_manwon"
+                value={formData.daily_budget_manwon}
+                onChange={handleChange}
+                min={1} max={500}
+                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-teal-500 text-slate-700" />
+            </div>
+            <div className="space-y-2">
+              <label className="text-sm font-semibold text-slate-700">📝 기타 특이사항 또는 요청사항</label>
+              <textarea name="notes"
+                value={formData.notes} onChange={handleChange}
+                maxLength={1000} rows={3}
+                placeholder="예) 휴스 차항이 있어 무리하지 않은 일정으로 짜주세요"
+                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-teal-500 text-slate-700 placeholder-slate-400 resize-none" />
+            </div>
+          </section>
           <button type="submit" disabled={isSubmitting}
             className="w-full relative group overflow-hidden rounded-2xl bg-blue-600 p-1 transition-all hover:shadow-2xl hover:shadow-blue-500/40 transform hover:-translate-y-1">
             <div className="relative px-8 py-5 bg-white/10 backdrop-blur-sm rounded-[12px] flex items-center justify-center gap-3">
@@ -423,6 +496,13 @@ export default function Home() {
             </div>
           </button>
           
+          {genTime && (
+            <div className="flex items-center justify-center gap-2 text-sm text-emerald-700 font-semibold bg-emerald-50 border border-emerald-200 rounded-xl p-3">
+              <span>✅ 일정 생성 완료 — 소요 시간: <strong>{genTime}</strong></span>
+              <span className="text-emerald-500">{parseFloat(genTime) <= 5 ? "(목표 ≤5초 충족 ✓)" : "(목표 ≤5초 초과 ⚠️)"}</span>
+            </div>
+          )}
+
           {errorMsg && (
             <div className="text-center text-red-500 font-medium p-3 bg-red-50 rounded-xl border border-red-200">
               {errorMsg}

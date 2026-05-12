@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Pick & Go DB 처리 로직 상세 순서도 (ISO 규격)</title>
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs';
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: 'base',
+      themeVariables: {
+        fontFamily: "'Noto Sans KR', sans-serif"
+      },
+      flowchart: {
+        curve: 'linear',  // 순서도는 직각/직선이 표준
+        nodeSpacing: 50,
+        rankSpacing: 60
+      }
+    });
+  </script>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;700&display=swap');
+    body {
+      font-family: 'Noto Sans KR', sans-serif;
+      background: #e8ecf2;
+      display: flex;
+      justify-content: center;
+      padding: 40px 20px;
+      margin: 0;
+    }
+    .container {
+      background: #ffffff;
+      border-radius: 8px;
+      box-shadow: 0 4px 15px rgba(0,0,0,0.05);
+      padding: 40px;
+      width: 100%;
+      max-width: 900px;
+      border: 1px solid #d1d9e6;
+    }
+    h2 {
+      text-align: center;
+      color: #2c3e50;
+      margin-top: 0;
+      font-weight: 700;
+    }
+    .desc {
+      text-align: center;
+      color: #5a6c7f;
+      font-size: 14px;
+      margin-bottom: 30px;
+    }
+    .mermaid {
+      display: flex;
+      justify-content: center;
+    }
+    .legend-box {
+      margin-top: 40px;
+      padding: 20px;
+      background: #f8f9fc;
+      border-radius: 6px;
+      font-size: 13px;
+      border-left: 4px solid #34495e;
+    }
+    .legend-box strong { color: #2c3e50; }
+  </style>
+</head>
+<body>
+
+<div class="container">
+  <h2>Pick &amp; Go DB 처리 통합 순서도<br><span style="font-size:16px; color:#7f8c8d;">(일정 생성 API 기준 처리 흐름)</span></h2>
+  <div class="desc">
+    국제 규격(ISO 5807) 기호를 준수하여, 사용자 요청 하나에서 발생하는<br>
+    <strong>실시간 캐시 처리(동기)</strong>와 <strong>데이터 축적(비동기)</strong>의 복합 프로세스를 명확히 시각화하였습니다.
+  </div>
+
+  <div class="mermaid">
+    flowchart TD
+        %% 국제 표준 기호 색상
+        classDef terminal fill:#2c3e50,color:#fff,stroke:#1a252f,stroke-width:2px
+        classDef decision fill:#ffffff,stroke:#d35400,stroke-width:2.5px,font-weight:bold
+        classDef io fill:#fce8e6,color:#c0392b,stroke:#c0392b,stroke-width:2px
+        %% 비-DB 파트 음영
+        classDef dimmed fill:#f8f9f9,stroke:#bdc3c7,stroke-width:2px,stroke-dasharray:5 5,color:#7f8c8d
+        %% ✅ 구현 상태 범례 클래스
+        classDef done fill:#27ae60,color:#fff,stroke:#1e8449,stroke-width:2px
+        classDef inprogress fill:#a8d8a8,color:#1a5e1a,stroke:#27ae60,stroke-width:2px
+        classDef designing fill:#f5cba7,color:#784212,stroke:#e67e22,stroke-width:2px
+        classDef doneDB fill:#27ae60,color:#fff,stroke:#1e8449,stroke-width:2px
+        classDef designDB fill:#f5cba7,color:#784212,stroke:#e67e22,stroke-width:2px
+
+        %% 외부 (비-DB) 처리부
+        class Start,Fork,End terminal
+        class Response io
+
+        %% ===========================
+        Start([시작: 사용자 일정 생성 API 호출]):::dimmed
+        
+        Start --> RouteCalc[알고리즘: 일정 동선 계산 진입]:::dimmed
+        RouteCalc --> NeedTime[A장소 ➔ B장소 이동시간 데이터 요청]:::dimmed
+        
+        %% ===========================
+        %% 핵심 1. 이동시간 캐시 관리부 ✅ 구현 완료
+        %% ===========================
+        subgraph SubB ["⚡ [이동시간 캐시 관리부]"]
+            CacheDB[(이동시간 캐시 DB<br>movement_cache 조회)]:::doneDB
+            CheckHit{캐시 데이터<br>존재 판별}:::done
+            UseCache[조회된 이동시간 즉시 반환]:::done
+            CallMapAPI[외부 지도 API<br>교통 정보 실시간 호출]:::done
+            SaveCache[(새로운 이동시간 결과<br>캐시 DB 추가 저장)]:::doneDB
+        end
+        NeedTime --> CacheDB
+        
+        CacheDB --> CheckHit
+        CheckHit -- "[존재함] DB Hit" --> UseCache
+        CheckHit -- "[없음] DB Miss" --> CallMapAPI
+        CallMapAPI --> SaveCache
+        SaveCache --> UseCache
+        
+        UseCache --> GeneratePlan[최종 여행 일정 추천 동선 생성 확정]:::dimmed
+        
+        %% ===========================
+        GeneratePlan --> Fork((시스템 스레드<br>분기점)):::dimmed
+        
+        %% 분기 A: 응답
+        Fork -- "[메인 스레드] 동기 완료" --> Response[/출력: 사용자에게 최종 일정 JSON 응답 반환/]:::dimmed
+        
+        %% ===========================
+        %% 핵심 2. 장소 데이터 수집부 ✅ 구현 완료
+        %% ===========================
+        subgraph SubA ["🛠️ [장소 데이터 수집부]"]
+            GenKeywords[검색 도시 기반 다중 테마 키워드 생성]:::done
+            FetchAPI[Google/Kakao 장소 API 대규모 일괄 호출]:::done
+            SavePlaces[(여행 DB places 테이블<br>장소 RAW 데이터 병합 저장)]:::doneDB
+        end
+        
+        Fork -. "[백그라운드 스레드] 비동기 처리" .-> GenKeywords
+        GenKeywords --> FetchAPI
+        FetchAPI --> SavePlaces
+        SavePlaces --> End([종료: 백그라운드 시스템 작업 완료]):::dimmed
+  </div>
+
+  <div class="legend-box">
+    <strong>[구현 현황 범례]</strong>&nbsp;&nbsp;
+    <span style="display:inline-flex;align-items:center;gap:16px;margin-top:8px;flex-wrap:wrap;">
+      <span style="background:#27ae60;color:#fff;padding:4px 14px;border-radius:4px;font-size:13px;font-weight:600;">✅ 구현 완료</span>
+      <span style="background:#a8d8a8;color:#1a5e1a;padding:4px 14px;border-radius:4px;font-size:13px;font-weight:600;">🔧 구현 중</span>
+      <span style="background:#f5cba7;color:#784212;padding:4px 14px;border-radius:4px;font-size:13px;font-weight:600;">📐 설계 중</span>
+    </span>
+    <br><br>
+    <strong>[설계물 동작 가시성 분석표]</strong><br><br>
+    1. <strong>도형 규격 (ISO 5807 표준)</strong>: <br>
+       - 타원(시작/종료점), 직사각형(연산 기능), 마름모(조건 판단), 원통(DB/저장소), 평행사변형(사용자 입출력) 준수.<br>
+    2. <strong>동작의 입체적 가시화</strong>:<br>
+       - <strong>[메인 스레드 - 실선 화살표]</strong>: 일정 생성을 멈추지 않고 신속하게 처리하기 위한 "초고속 캐시 메커니즘" 시각화.<br>
+       - <strong>[백그라운드 스레드 - 점선 화살표]</strong>: 앱 응답 속도에 영향을 주지 않으면서(API 응답 이후) 방대한 데이터를 조용히 축적하는 전략 시각화.
+  </div>
+</div>
+
+</body>
+</html>

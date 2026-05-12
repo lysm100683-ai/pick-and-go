@@ -1,0 +1,425 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Pick & Go – 전체 설계도 (DB부 수정)</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;600;700&display=swap');
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Noto Sans KR', sans-serif;
+      background: #e8ecf2;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: flex-start;
+      min-height: 100vh;
+      padding: 36px 20px;
+      gap: 28px;
+    }
+
+    .diagram-title {
+      font-size: 13px;
+      font-weight: 700;
+      color: #333;
+      text-align: center;
+    }
+
+    /* ── 각 섹션 패널 ── */
+    .section-panel {
+      border-radius: 6px;
+      border: 1.8px solid #999;
+      padding: 8px 12px;
+      background: #fff;
+      position: relative;
+    }
+    .section-panel.input-sec  { border-color: #c0392b; }
+    .section-panel.db-sec     { border-color: #5570a0; }
+    .section-panel.proc-sec   { border-color: #27ae60; }
+    .section-panel.output-sec { border-color: #2980b9; }
+    .section-panel.resv-sec   { border-color: #1a1a1a; }
+
+    .panel-label {
+      font-size: 11px;
+      font-weight: 700;
+      margin-bottom: 8px;
+    }
+    .input-sec  .panel-label { color: #c0392b; }
+    .db-sec     .panel-label { color: #2c4a8a; }
+    .proc-sec   .panel-label { color: #27ae60; }
+    .output-sec .panel-label { color: #2980b9; }
+    .resv-sec   .panel-label { color: #1a1a1a; }
+
+    /* 각 섹션 SVG 래퍼 */
+    .section-panel svg {
+      display: block;
+    }
+
+    /* 인쇄 버튼 */
+    .btn-row {
+      display: flex;
+      gap: 10px;
+    }
+    .btn {
+      padding: 8px 22px;
+      border: none;
+      border-radius: 20px;
+      font-size: 12px;
+      font-family: 'Noto Sans KR', sans-serif;
+      cursor: pointer;
+      transition: opacity 0.2s;
+    }
+    .btn:hover { opacity: 0.8; }
+    .btn-print { background: #3a5c9a; color: #fff; }
+    .btn-export { background: #2d7e3a; color: #fff; }
+
+    @media print {
+      body { background: #fff; padding: 0; gap: 14px; }
+      .btn-row { display: none; }
+    }
+  </style>
+</head>
+<body>
+
+<div class="diagram-title">Pick &amp; Go 전체 설계도 (DB부 수정버전)</div>
+
+<!-- ════════════════════════════════════
+     입력부 (기존 유지)
+════════════════════════════════════ -->
+<div class="section-panel input-sec" style="width:900px;">
+  <div class="panel-label">입력부</div>
+  <svg width="876" height="54" viewBox="0 0 876 54"
+       style="font-family:'Noto Sans KR',sans-serif;">
+    <defs>
+      <marker id="a1" markerWidth="7" markerHeight="7" refX="6" refY="3" orient="auto">
+        <path d="M0,0 L0,6 L7,3 z" fill="#888"/>
+      </marker>
+    </defs>
+    <!-- USER 아이콘 간략 -->
+    <circle cx="26" cy="24" r="10" fill="none" stroke="#888" stroke-width="1.4"/>
+    <text x="26" y="27" text-anchor="middle" font-size="7" fill="#666">USER</text>
+    <line x1="36" y1="24" x2="54" y2="24" stroke="#888" stroke-width="1.2" stroke-dasharray="3,2" marker-end="url(#a1)"/>
+    <text x="55" y="20" font-size="9" fill="#666">사용자 조건 입력</text>
+    <line x1="136" y1="24" x2="156" y2="24" stroke="#888" stroke-width="1.2" stroke-dasharray="3,2" marker-end="url(#a1)"/>
+    <!-- Nodes -->
+    <!-- 입력값 유효성 -->
+    <rect x="158" y="8" width="100" height="32" rx="4" fill="#fff" stroke="#bbb" stroke-width="1.2"/>
+    <text x="208" y="24" text-anchor="middle" font-size="9.5" fill="#333">입력값 유효성 검증부</text>
+    <line x1="258" y1="24" x2="278" y2="24" stroke="#888" stroke-width="1.2" marker-end="url(#a1)"/>
+    <!-- 기본 전처리 -->
+    <rect x="280" y="8" width="88" height="32" rx="4" fill="#fff" stroke="#bbb" stroke-width="1.2"/>
+    <text x="324" y="24" text-anchor="middle" font-size="9.5" fill="#333">기본 전처리부</text>
+    <line x1="368" y1="24" x2="388" y2="24" stroke="#888" stroke-width="1.2" marker-end="url(#a1)"/>
+    <!-- 조건 유형 분류 -->
+    <rect x="390" y="8" width="100" height="32" rx="4" fill="#fff" stroke="#bbb" stroke-width="1.2"/>
+    <text x="440" y="24" text-anchor="middle" font-size="9.5" fill="#333">조건 유형 분류부</text>
+    <line x1="490" y1="24" x2="510" y2="24" stroke="#888" stroke-width="1.2" marker-end="url(#a1)"/>
+    <!-- 조건 전달 -->
+    <rect x="512" y="8" width="88" height="32" rx="4" fill="#fff" stroke="#bbb" stroke-width="1.2"/>
+    <text x="556" y="24" text-anchor="middle" font-size="9.5" fill="#333">조건 전달부</text>
+  </svg>
+</div>
+
+<!-- ════════════════════════════════════
+     DB부 (수정 핵심)
+════════════════════════════════════ -->
+<div class="section-panel db-sec" style="width:900px;">
+  <div class="panel-label">DB부</div>
+  <svg width="876" height="224" viewBox="0 0 876 224"
+       style="font-family:'Noto Sans KR',sans-serif;">
+    <defs>
+      <marker id="arr" markerWidth="8" markerHeight="8" refX="6.5" refY="3.5" orient="auto">
+        <path d="M0,0 L0,7 L7.5,3.5 z" fill="#5570a0"/>
+      </marker>
+      <marker id="arr-d" markerWidth="8" markerHeight="8" refX="6.5" refY="3.5" orient="auto">
+        <path d="M0,0 L0,7 L7.5,3.5 z" fill="#7a9cc0"/>
+      </marker>
+      <marker id="arr-g" markerWidth="8" markerHeight="8" refX="6.5" refY="3.5" orient="auto">
+        <path d="M0,0 L0,7 L7.5,3.5 z" fill="#2d7e3a"/>
+      </marker>
+      <linearGradient id="gDb" x1="0%" y1="0%" x2="100%" y2="100%">
+        <stop offset="0%" stop-color="#c5d8f0"/>
+        <stop offset="100%" stop-color="#8fb0d8"/>
+      </linearGradient>
+      <linearGradient id="gDbt" x1="0%" y1="0%" x2="0%" y2="100%">
+        <stop offset="0%" stop-color="#d8eaf8"/>
+        <stop offset="100%" stop-color="#b0ccec"/>
+      </linearGradient>
+      <linearGradient id="gDbb" x1="0%" y1="0%" x2="0%" y2="100%">
+        <stop offset="0%" stop-color="#9cbed8"/>
+        <stop offset="100%" stop-color="#80a8ce"/>
+      </linearGradient>
+    </defs>
+
+    <!-- 서브시스템 배경 ①수집·정제 -->
+    <rect x="4" y="4" width="368" height="210" rx="7"
+          fill="rgba(238,244,252,0.5)" stroke="#7a9cc0" stroke-width="1.2" stroke-dasharray="5,3"/>
+    <text x="12" y="18" font-size="8.5" fill="#4a72a8" font-weight="600">① 데이터 수집 · 정제</text>
+
+    <!-- 서브시스템 배경 ②여행 데이터 적재 -->
+    <rect x="382" y="4" width="282" height="116" rx="7"
+          fill="rgba(232,240,252,0.55)" stroke="#5570a0" stroke-width="1.2" stroke-dasharray="5,3"/>
+    <text x="390" y="18" font-size="8.5" fill="#3a5889" font-weight="600">② 여행 데이터 적재</text>
+
+    <!-- 서브시스템 배경 ③이동시간 캐시 -->
+    <rect x="382" y="128" width="282" height="86" rx="7"
+          fill="rgba(240,245,252,0.45)" stroke="#7a9cc0" stroke-width="1.2" stroke-dasharray="5,3"/>
+    <text x="390" y="142" font-size="8.5" fill="#4a72a8" font-weight="600">③ 이동시간 캐시</text>
+
+    <!-- ── ROW A: 수집 파이프라인 ── y=30 -->
+    <!-- [A1] 수집 조건 생성 -->
+    <rect x="16" y="30" width="80" height="48" rx="4" fill="#fff" stroke="#aab6cc" stroke-width="1.4"/>
+    <text x="56" y="52" text-anchor="middle" font-size="9.5" fill="#1a2340">수집 조건</text>
+    <text x="56" y="66" text-anchor="middle" font-size="9.5" fill="#1a2340">생성</text>
+
+    <!-- A1→A2 -->
+    <line x1="96" y1="54" x2="116" y2="54" stroke="#5570a0" stroke-width="1.4" marker-end="url(#arr)"/>
+
+    <!-- [A2] 국내/해외 판별 (rounded) -->
+    <rect x="118" y="30" width="80" height="48" rx="24" fill="#fff9ec" stroke="#c89830" stroke-width="1.4"/>
+    <text x="158" y="52" text-anchor="middle" font-size="9.5" fill="#7a5200">국내/해외</text>
+    <text x="158" y="66" text-anchor="middle" font-size="9.5" fill="#7a5200">판별</text>
+
+    <!-- A2→A3 -->
+    <line x1="198" y1="54" x2="218" y2="54" stroke="#5570a0" stroke-width="1.4" marker-end="url(#arr)"/>
+
+    <!-- [A3] 추가 데이터 생성 -->
+    <rect x="220" y="30" width="80" height="48" rx="4" fill="#fff" stroke="#aab6cc" stroke-width="1.4"/>
+    <text x="260" y="52" text-anchor="middle" font-size="9.5" fill="#1a2340">추가 데이터</text>
+    <text x="260" y="66" text-anchor="middle" font-size="9.5" fill="#1a2340">생성</text>
+
+    <!-- A3→A4 -->
+    <line x1="300" y1="54" x2="320" y2="54" stroke="#5570a0" stroke-width="1.4" marker-end="url(#arr)"/>
+
+    <!-- [A4] 외부 여행정보 가져오기 -->
+    <rect x="322" y="22" width="82" height="70" rx="4" fill="#e2ecf8" stroke="#4a6ea0" stroke-width="1.5"/>
+    <text x="363" y="48" text-anchor="middle" font-size="9.5" fill="#1a357a" font-weight="600">외부 여행정보</text>
+    <text x="363" y="62" text-anchor="middle" font-size="9.5" fill="#1a357a" font-weight="600">가져오기</text>
+    <!-- API 뱃지 -->
+    <rect x="330" y="80" width="66" height="12" rx="5" fill="#3a5890"/>
+    <text x="363" y="89" text-anchor="middle" font-size="7" fill="#fff" font-weight="700">Google / Kakao API</text>
+
+    <!-- A4→B1 -->
+    <line x1="404" y1="57" x2="420" y2="57" stroke="#5570a0" stroke-width="1.4" marker-end="url(#arr)"/>
+
+    <!-- [B1] 장소 RAW 데이터 저장 -->
+    <rect x="422" y="24" width="92" height="66" rx="4" fill="#e2ecf8" stroke="#4a6ea0" stroke-width="1.5"/>
+    <text x="468" y="50" text-anchor="middle" font-size="9.5" fill="#1a357a" font-weight="600">장소 RAW</text>
+    <text x="468" y="64" text-anchor="middle" font-size="9.5" fill="#1a357a" font-weight="600">데이터 저장</text>
+    <!-- PostGIS 뱃지 -->
+    <rect x="430" y="80" width="76" height="12" rx="5" fill="#2e5986"/>
+    <text x="468" y="89" text-anchor="middle" font-size="7" fill="#fff" font-weight="700">PostgreSQL + PostGIS</text>
+
+    <!-- B1→B2 -->
+    <line x1="514" y1="57" x2="534" y2="57" stroke="#5570a0" stroke-width="1.4" marker-end="url(#arr)"/>
+
+    <!-- [B2] 장소 목록 불러오기 준비 -->
+    <rect x="536" y="24" width="92" height="88" rx="4" fill="#fff" stroke="#aab6cc" stroke-width="1.4"/>
+    <text x="582" y="54" text-anchor="middle" font-size="9.5" fill="#1a2340">장소 목록</text>
+    <text x="582" y="68" text-anchor="middle" font-size="9.5" fill="#1a2340">불러오기</text>
+    <text x="582" y="82" text-anchor="middle" font-size="9.5" fill="#1a2340">준비</text>
+
+    <!-- ── ROW C: 이동 캐시 ── y=150 -->
+    <!-- 수집조건 → 캐시행 분기 (A2 하단에서 C1) -->
+    <polyline points="158,78 158,114 390,114 390,158 394,158"
+              stroke="#aab6cc" stroke-width="1.1" fill="none" stroke-dasharray="4,2"
+              marker-end="url(#arr-d)"/>
+    <text x="264" y="110" text-anchor="middle" font-size="8" fill="#999">이동 조건 전달</text>
+
+    <!-- [C1] 이동시간 캐시 조회 -->
+    <rect x="396" y="150" width="82" height="48" rx="4"
+          fill="#f0f5fc" stroke="#7a9cc0" stroke-width="1.4" stroke-dasharray="4,2"/>
+    <text x="437" y="172" text-anchor="middle" font-size="9.5" fill="#2c4a7a">이동시간</text>
+    <text x="437" y="186" text-anchor="middle" font-size="9.5" fill="#2c4a7a">캐시 조회</text>
+
+    <!-- C1→C2 -->
+    <line x1="478" y1="174" x2="496" y2="174" stroke="#7a9cc0" stroke-width="1.4"
+          stroke-dasharray="4,2" marker-end="url(#arr-d)"/>
+
+    <!-- [C2] 지도 API 실시간 호출 -->
+    <rect x="498" y="150" width="82" height="48" rx="4"
+          fill="#f0f5fc" stroke="#7a9cc0" stroke-width="1.4" stroke-dasharray="4,2"/>
+    <text x="539" y="172" text-anchor="middle" font-size="9.5" fill="#2c4a7a">지도 API</text>
+    <text x="539" y="186" text-anchor="middle" font-size="9.5" fill="#2c4a7a">실시간 호출</text>
+
+    <!-- C2→C3 -->
+    <line x1="580" y1="174" x2="598" y2="174" stroke="#7a9cc0" stroke-width="1.4"
+          stroke-dasharray="4,2" marker-end="url(#arr-d)"/>
+
+    <!-- [C3] 캐시 저장 -->
+    <rect x="600" y="150" width="58" height="48" rx="4"
+          fill="#f0f5fc" stroke="#7a9cc0" stroke-width="1.4" stroke-dasharray="4,2"/>
+    <text x="629" y="172" text-anchor="middle" font-size="9.5" fill="#2c4a7a">캐시</text>
+    <text x="629" y="186" text-anchor="middle" font-size="9.5" fill="#2c4a7a">저장</text>
+
+    <!-- ── 여행 DB (원통형) ── cx=730 -->
+    <!-- B2 우측 꺾임 → DB 상단 -->
+    <polyline points="628,68 720,68 720,132"
+              stroke="#5570a0" stroke-width="1.4" fill="none" marker-end="url(#arr)"/>
+    <!-- C3 우측 꺾임 → DB 하단 -->
+    <polyline points="658,174 740,174 740,166"
+              stroke="#7a9cc0" stroke-width="1.4" fill="none" stroke-dasharray="4,2"
+              marker-end="url(#arr-d)"/>
+
+    <!-- DB 원통 몸통 -->
+    <rect x="688" y="136" width="94" height="52" fill="url(#gDb)" stroke="#2e5a9e" stroke-width="2"/>
+    <!-- 위 타원 -->
+    <ellipse cx="735" cy="136" rx="47" ry="13" fill="url(#gDbt)" stroke="#2e5a9e" stroke-width="2"/>
+    <!-- 아래 타원 -->
+    <ellipse cx="735" cy="188" rx="47" ry="13" fill="url(#gDbb)" stroke="#2e5a9e" stroke-width="2"/>
+    <!-- DB 라벨 -->
+    <text x="735" y="160" text-anchor="middle" font-size="11.5" fill="#1a2e5a" font-weight="700">여행 DB</text>
+    <text x="735" y="176" text-anchor="middle" font-size="8" fill="#3a5284">(PostgreSQL)</text>
+
+    <!-- DB → 처리부 출력 -->
+    <line x1="782" y1="162" x2="828" y2="162" stroke="#2d7e3a" stroke-width="1.6" marker-end="url(#arr-g)"/>
+    <rect x="830" y="146" width="40" height="32" rx="4" fill="#e6f4e8" stroke="#3a9a48" stroke-width="1.4"/>
+    <text x="850" y="160" text-anchor="middle" font-size="8.5" fill="#1a5a24">→ 처리부</text>
+    <text x="850" y="172" text-anchor="middle" font-size="7.5" fill="#1a5a24">전달</text>
+
+    <!-- 범례 -->
+    <rect x="6" y="192" width="18" height="12" rx="2" fill="#fff" stroke="#aab6cc" stroke-width="1"/>
+    <text x="28" y="202" font-size="8" fill="#555">기본 처리</text>
+    <rect x="90" y="192" width="18" height="12" rx="2" fill="#e2ecf8" stroke="#4a6ea0" stroke-width="1"/>
+    <text x="112" y="202" font-size="8" fill="#555">API 호출</text>
+    <rect x="168" y="192" width="18" height="12" rx="2" fill="#f0f5fc" stroke="#7a9cc0" stroke-width="1" stroke-dasharray="3,2"/>
+    <text x="190" y="202" font-size="8" fill="#555">캐시 처리 (점선)</text>
+    <rect x="288" y="192" width="24" height="12" rx="7" fill="#fff9ec" stroke="#c89830" stroke-width="1"/>
+    <text x="316" y="202" font-size="8" fill="#555">분기</text>
+  </svg>
+</div>
+
+<!-- ════════════════════════════════════
+     처리부 (기존 유지)
+════════════════════════════════════ -->
+<div class="section-panel proc-sec" style="width:900px;">
+  <div class="panel-label">처리부</div>
+  <svg width="876" height="54" viewBox="0 0 876 54"
+       style="font-family:'Noto Sans KR',sans-serif;">
+    <defs>
+      <marker id="ag" markerWidth="7" markerHeight="7" refX="6" refY="3" orient="auto">
+        <path d="M0,0 L0,6 L7,3 z" fill="#888"/>
+      </marker>
+    </defs>
+    <!-- 노드들 -->
+    <rect x="4"   y="8" width="88" height="32" rx="4" fill="#fff" stroke="#bbb" stroke-width="1.2"/>
+    <text x="48"  y="25" text-anchor="middle" font-size="9" fill="#333">조건 전처리부</text>
+    <line x1="92" y1="24" x2="110" y2="24" stroke="#888" stroke-width="1.2" marker-end="url(#ag)"/>
+
+    <rect x="112"  y="8" width="100" height="32" rx="4" fill="#fff" stroke="#bbb" stroke-width="1.2"/>
+    <text x="162"  y="25" text-anchor="middle" font-size="9" fill="#333">장소 카테고리 분류부</text>
+    <line x1="212" y1="24" x2="230" y2="24" stroke="#888" stroke-width="1.2" marker-end="url(#ag)"/>
+
+    <rect x="232"  y="8" width="100" height="32" rx="4" fill="#fff" stroke="#bbb" stroke-width="1.2"/>
+    <text x="282"  y="25" text-anchor="middle" font-size="9" fill="#333">장소 점수 산출부</text>
+    <line x1="332" y1="24" x2="350" y2="24" stroke="#888" stroke-width="1.2" marker-end="url(#ag)"/>
+
+    <rect x="352"  y="8" width="110" height="32" rx="4" fill="#fff" stroke="#bbb" stroke-width="1.2"/>
+    <text x="407"  y="25" text-anchor="middle" font-size="9" fill="#333">여행 일정 후보 생성부</text>
+    <line x1="462" y1="24" x2="480" y2="24" stroke="#888" stroke-width="1.2" marker-end="url(#ag)"/>
+
+    <rect x="482"  y="8" width="100" height="32" rx="4" fill="#fff" stroke="#bbb" stroke-width="1.2"/>
+    <text x="532"  y="25" text-anchor="middle" font-size="9" fill="#333">종합 점수 산출부</text>
+    <line x1="582" y1="24" x2="600" y2="24" stroke="#888" stroke-width="1.2" marker-end="url(#ag)"/>
+
+    <rect x="602"  y="8" width="100" height="32" rx="4" fill="#fff" stroke="#bbb" stroke-width="1.2"/>
+    <text x="652"  y="25" text-anchor="middle" font-size="9" fill="#333">오류 검증·처리부</text>
+    <line x1="702" y1="24" x2="720" y2="24" stroke="#888" stroke-width="1.2" marker-end="url(#ag)"/>
+
+    <rect x="722"  y="8" width="100" height="32" rx="4" fill="#fff" stroke="#bbb" stroke-width="1.2"/>
+    <text x="772"  y="25" text-anchor="middle" font-size="9" fill="#333">최종 포맷 형성부</text>
+  </svg>
+</div>
+
+<!-- ════════════════════════════════════
+     출력부 (기존 유지)
+════════════════════════════════════ -->
+<div class="section-panel output-sec" style="width:900px;">
+  <div class="panel-label">출력부</div>
+  <svg width="876" height="70" viewBox="0 0 876 70"
+       style="font-family:'Noto Sans KR',sans-serif;">
+    <defs>
+      <marker id="ab" markerWidth="7" markerHeight="7" refX="6" refY="3" orient="auto">
+        <path d="M0,0 L0,6 L7,3 z" fill="#888"/>
+      </marker>
+    </defs>
+    <rect x="4"   y="8" width="80" height="32" rx="4" fill="#fff" stroke="#bbb" stroke-width="1.2"/>
+    <text x="44"  y="25" text-anchor="middle" font-size="9" fill="#333">지도 표시부</text>
+    <line x1="84" y1="24" x2="100" y2="24" stroke="#888" stroke-width="1.2" marker-end="url(#ab)"/>
+
+    <rect x="102"  y="8" width="88" height="32" rx="4" fill="#fff" stroke="#bbb" stroke-width="1.2"/>
+    <text x="146"  y="25" text-anchor="middle" font-size="9" fill="#333">동선 시각화부</text>
+    <line x1="190" y1="24" x2="206" y2="24" stroke="#888" stroke-width="1.2" marker-end="url(#ab)"/>
+
+    <rect x="208"  y="8" width="100" height="32" rx="4" fill="#fff" stroke="#bbb" stroke-width="1.2"/>
+    <text x="258"  y="25" text-anchor="middle" font-size="9" fill="#333">상세 일정 표시부</text>
+    <line x1="308" y1="24" x2="324" y2="24" stroke="#888" stroke-width="1.2" marker-end="url(#ab)"/>
+
+    <rect x="326"  y="8" width="100" height="32" rx="4" fill="#fff" stroke="#bbb" stroke-width="1.2"/>
+    <text x="376"  y="25" text-anchor="middle" font-size="9" fill="#333">일정 비교 표시부</text>
+    <line x1="426" y1="24" x2="446" y2="24" stroke="#888" stroke-width="1.2" stroke-dasharray="3,2" marker-end="url(#ab)"/>
+
+    <!-- USER 선택 -->
+    <circle cx="460" cy="40" r="9" fill="none" stroke="#888" stroke-width="1.2"/>
+    <text x="460" y="43" text-anchor="middle" font-size="6.5" fill="#666">USER</text>
+    <text x="460" y="56" text-anchor="middle" font-size="7.5" fill="#666">여행 일정 선택</text>
+    <line x1="469" y1="40" x2="488" y2="40" stroke="#888" stroke-width="1.2" stroke-dasharray="3,2" marker-end="url(#ab)"/>
+
+    <rect x="490"  y="8" width="100" height="32" rx="4" fill="#fff" stroke="#bbb" stroke-width="1.2"/>
+    <text x="540"  y="25" text-anchor="middle" font-size="9" fill="#333">상세 일정 변경</text>
+    <line x1="590" y1="24" x2="610" y2="24" stroke="#888" stroke-width="1.2" stroke-dasharray="3,2" marker-end="url(#ab)"/>
+
+    <circle cx="624" cy="40" r="9" fill="none" stroke="#888" stroke-width="1.2"/>
+    <text x="624" y="43" text-anchor="middle" font-size="6.5" fill="#666">USER</text>
+    <line x1="633" y1="40" x2="650" y2="40" stroke="#888" stroke-width="1.2" stroke-dasharray="3,2" marker-end="url(#ab)"/>
+
+    <rect x="652"  y="8" width="100" height="32" rx="4" fill="#fff" stroke="#bbb" stroke-width="1.2"/>
+    <text x="702"  y="25" text-anchor="middle" font-size="9" fill="#333">일정 선택 처리부</text>
+  </svg>
+</div>
+
+<!-- ════════════════════════════════════
+     예약부 (기존 유지)
+════════════════════════════════════ -->
+<div class="section-panel resv-sec" style="width:900px;">
+  <div class="panel-label">예약부</div>
+  <svg width="876" height="54" viewBox="0 0 876 54"
+       style="font-family:'Noto Sans KR',sans-serif;">
+    <defs>
+      <marker id="ak" markerWidth="7" markerHeight="7" refX="6" refY="3" orient="auto">
+        <path d="M0,0 L0,6 L7,3 z" fill="#888"/>
+      </marker>
+    </defs>
+    <rect x="4"   y="8" width="100" height="32" rx="4" fill="#fff" stroke="#bbb" stroke-width="1.2"/>
+    <text x="54"  y="25" text-anchor="middle" font-size="9" fill="#333">예약 요청 검증부</text>
+    <line x1="104" y1="24" x2="122" y2="24" stroke="#888" stroke-width="1.2" marker-end="url(#ak)"/>
+
+    <rect x="124"  y="8" width="110" height="32" rx="4" fill="#fff" stroke="#bbb" stroke-width="1.2"/>
+    <text x="179"  y="25" text-anchor="middle" font-size="9" fill="#333">외부 예약 연동 관리부</text>
+    <line x1="234" y1="24" x2="252" y2="24" stroke="#888" stroke-width="1.2" marker-end="url(#ak)"/>
+
+    <rect x="254"  y="8" width="100" height="32" rx="4" fill="#fff" stroke="#bbb" stroke-width="1.2"/>
+    <text x="304"  y="25" text-anchor="middle" font-size="9" fill="#333">예약 확정 검증부</text>
+    <line x1="354" y1="24" x2="372" y2="24" stroke="#888" stroke-width="1.2" marker-end="url(#ak)"/>
+
+    <rect x="374"  y="8" width="100" height="32" rx="4" fill="#fff" stroke="#bbb" stroke-width="1.2"/>
+    <text x="424"  y="25" text-anchor="middle" font-size="9" fill="#333">예약 정보 저장부</text>
+    <line x1="474" y1="24" x2="492" y2="24" stroke="#888" stroke-width="1.2" marker-end="url(#ak)"/>
+
+    <rect x="494"  y="8" width="100" height="32" rx="4" fill="#fff" stroke="#bbb" stroke-width="1.2"/>
+    <text x="544"  y="25" text-anchor="middle" font-size="9" fill="#333">예약 결과 안내부</text>
+  </svg>
+</div>
+
+<p style="font-size:12px; font-weight:600; color:#444; text-align:center; margin-top:4px;">
+  [그림 1] 전체 설계도 (DB부 수정버전)
+</p>
+
+<div class="btn-row">
+  <button class="btn btn-print" onclick="window.print()">🖨️ 인쇄 / PDF 저장</button>
+</div>
+
+</body>
+</html>
