@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Pick & Go DB 상세 설계도 (하이브리드형)</title>
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs';
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: 'base',
+      themeVariables: {
+        fontFamily: "'Noto Sans KR', sans-serif"
+      },
+      flowchart: {
+        curve: 'stepAfter', // 깔끔한 직각-수평 꺾임 선호
+        nodeSpacing: 40,
+        rankSpacing: 60,
+        padding: 20
+      }
+    });
+
+    // 렌더링 후 화면 꽉차게 조정
+    setTimeout(() => {
+        const svg = document.querySelector('svg');
+        if (svg) {
+            svg.style.maxWidth = '100%';
+            svg.style.height = 'auto';
+        }
+    }, 500);
+  </script>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;700&display=swap');
+    body {
+      font-family: 'Noto Sans KR', sans-serif;
+      background: #e8ecf2;
+      display: flex;
+      justify-content: center;
+      padding: 40px 20px;
+      margin: 0;
+    }
+    .container {
+      background: #ffffff;
+      border-radius: 12px;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.08);
+      padding: 40px;
+      width: 100%;
+      max-width: 1300px;
+      border: 1px solid #d1d9e6;
+    }
+    h2 {
+      text-align: center;
+      color: #2c3e50;
+      margin-top: 0;
+      margin-bottom: 5px;
+      font-weight: 700;
+      font-size: 26px;
+    }
+    .desc {
+      text-align: center;
+      color: #7f8c8d;
+      font-size: 15px;
+      margin-bottom: 35px;
+      line-height: 1.5;
+    }
+    .mermaid {
+      display: flex;
+      justify-content: center;
+      overflow-x: auto;
+    }
+  </style>
+</head>
+<body>
+
+<div class="container">
+  <h2>Pick &amp; Go DB부 Subwhat 통합 아키텍처</h2>
+  <div class="desc">
+    기초 설계도의 <strong>수평형(Left-to-Right) 직관적 깔끔함</strong>을 유지하면서,<br>
+    통합 순서도의 <strong>국제 표준(ISO) 및 시점/흐름에 대한 스토리(동기 vs 비동기)</strong>를 완벽히 결합한 최종 설계도입니다.
+  </div>
+
+  <div class="mermaid">
+    flowchart TD
+        %% ■ 사용자 원본 이미지 스타일 + 국제표준 복합 클래스 선언
+        classDef term fill:#f8f9fa,stroke:#34495e,stroke-width:2px,rx:20,ry:20,color:#2c3e50,font-weight:bold
+        classDef proc fill:#ffffff,stroke:#7f8c8d,stroke-width:1.5px,rx:4,ry:4,color:#333
+        classDef procHigh fill:#eef4fc,stroke:#5570a0,stroke-width:1.5px,rx:4,ry:4,color:#2c4a8a,font-weight:bold
+        classDef db fill:#dae8f9,stroke:#2c4a8a,stroke-width:2px,shape:cylinder,color:#2c4a8a,font-weight:bold
+        classDef deci fill:#ffffff,stroke:#d35400,stroke-width:1.5px,shape:diamond,color:#d35400
+        classDef output fill:#f9ebea,stroke:#c0392b,stroke-width:2px,color:#c0392b,font-weight:bold
+
+        %% ■ 시작점
+        Start([API 요청 진입]):::term
+
+        %% 분기 및 스토리텔링 라인
+        Start -. "백그라운드 스레드로 조용히 진입 (사용자 응답 무관)" .-> A1
+        Start == "메인 스레드로 즉각 수행 (동선 짤 때마다 반복)" ==> B1
+
+        %% ==========================================
+        %% [Subwhat A] 비동기 데이터 수집 (상단)
+        %% ==========================================
+        subgraph SubA ["🛠️ Subwhat A: 미래를 위한 장소 데이터 수집 파이프라인 (비동기)"]
+            direction TD
+            A1(수집 조건 설정):::proc --> A2{해외여부<br>판별}:::deci
+            A2 --> A3(추가 검색어 패턴<br>난수화-Epsilon 적용):::proc
+            A3 --> A4(외부 여행정보 API<br>일괄 가져오기):::procHigh
+            A4 --> A5(좌표 검증 및<br>중복 정제 준비):::proc
+            A5 --> A6[(여행 장소 DB<br>places 테이블에<br>Upsert 적재)]:::db
+        end
+
+        %% ==========================================
+        %% [Subwhat B] 실시간 캐시 (하단)
+        %% ==========================================
+        subgraph SubB ["⚡ Subwhat B: 일정 최적화용 이동시간 캐시 파이프라인 (동기)"]
+            direction TD
+            B1(A장소 ➔ B장소<br>이동시간 요청):::proc --> B2[(이동시간 캐시<br>DB 우선 조회)]:::db
+            B2 --> B3{캐시<br>존재?}:::deci
+            B3 -- "[Miss] 없음" --> B4(지도 API<br>실시간 호출):::procHigh
+            B4 --> B5[(가장 최신 경로<br>캐시 DB 추가)]:::db
+            B3 -- "[Hit] 방금찾음" --> B6(캐시된 신속한<br>이동시간 획득):::proc
+            B5 --> B6
+        end
+
+        %% ■ 종료점
+        A6 --> EndA([백그라운드<br>데이터 수집완료]):::term
+        B6 --> EndB[/최종 여행일정<br>최적화 완료 후 반환/]:::output
+  </div>
+
+</div>
+
+</body>
+</html>

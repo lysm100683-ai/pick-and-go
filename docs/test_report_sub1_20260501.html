@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Pick & Go — 예약 검증부 단위 테스트 결과 (2026-05-01)</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;600;700&family=JetBrains+Mono:wght@400;600&display=swap');
+    *{box-sizing:border-box;margin:0;padding:0;}
+    body{font-family:'Noto Sans KR',sans-serif;background:#f0f2f6;min-height:100vh;padding:32px 20px 60px;}
+
+    .page-wrap{max-width:860px;margin:0 auto;display:flex;flex-direction:column;gap:20px;}
+
+    /* ── Header ── */
+    .header{background:#1a2340;border-radius:10px;padding:28px 32px;color:#fff;}
+    .header-top{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;}
+    .badge-pass{background:#22c55e;color:#fff;font-size:13px;font-weight:700;padding:6px 18px;border-radius:20px;letter-spacing:.5px;}
+    .header h1{font-size:20px;font-weight:700;margin-bottom:4px;}
+    .header .sub{font-size:12px;opacity:.65;margin-bottom:16px;}
+    .meta-row{display:flex;flex-wrap:wrap;gap:18px;margin-top:10px;}
+    .meta-item{font-size:11.5px;opacity:.8;}
+    .meta-item strong{opacity:1;color:#93c5fd;}
+
+    /* ── Summary Cards ── */
+    .summary-cards{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;}
+    .scard{background:#fff;border-radius:8px;padding:18px 16px;text-align:center;border-top:4px solid #e5e7eb;}
+    .scard.pass{border-color:#22c55e;}
+    .scard.total{border-color:#3b82f6;}
+    .scard.tc{border-color:#8b5cf6;}
+    .scard.time{border-color:#f59e0b;}
+    .scard-num{font-size:32px;font-weight:700;line-height:1;}
+    .scard-num.green{color:#16a34a;}
+    .scard-num.blue{color:#2563eb;}
+    .scard-num.purple{color:#7c3aed;}
+    .scard-num.amber{color:#d97706;}
+    .scard-label{font-size:11px;color:#6b7280;margin-top:6px;}
+
+    /* ── Section ── */
+    .section{background:#fff;border-radius:8px;overflow:hidden;}
+    .sec-header{padding:14px 20px;background:#f8fafc;border-bottom:1px solid #e5e7eb;display:flex;align-items:center;gap:10px;}
+    .sec-title{font-size:13px;font-weight:700;color:#1e293b;}
+    .sec-num{font-size:10px;background:#e0e7ff;color:#3730a3;border-radius:10px;padding:2px 9px;font-weight:700;}
+
+    /* ── TC Table ── */
+    .tc-table{width:100%;border-collapse:collapse;}
+    .tc-table th{background:#f1f5f9;font-size:11px;font-weight:700;color:#475569;padding:10px 14px;text-align:left;border-bottom:1px solid #e2e8f0;}
+    .tc-table td{padding:11px 14px;font-size:12px;color:#334155;border-bottom:1px solid #f1f5f9;vertical-align:middle;}
+    .tc-table tr:last-child td{border-bottom:none;}
+    .tc-table tr:hover td{background:#fafbfc;}
+    .tc-num{font-family:'JetBrains Mono',monospace;font-size:10.5px;color:#64748b;font-weight:600;}
+    .tc-badge{display:inline-block;font-size:9px;font-weight:700;padding:2px 8px;border-radius:10px;}
+    .tc-badge.normal{background:#dbeafe;color:#1e40af;}
+    .tc-badge.error{background:#fee2e2;color:#991b1b;}
+    .result-pass{display:inline-flex;align-items:center;gap:4px;font-size:11.5px;font-weight:700;color:#16a34a;}
+    .result-dot{width:8px;height:8px;border-radius:50%;background:#22c55e;}
+    .code-tag{font-family:'JetBrains Mono',monospace;font-size:10px;background:#f0f9ff;color:#0369a1;border:1px solid #bae6fd;border-radius:4px;padding:1px 6px;}
+
+    /* ── Console Output ── */
+    .console{background:#0f172a;border-radius:0 0 8px 8px;padding:18px 20px;font-family:'JetBrains Mono',monospace;font-size:11.5px;line-height:1.9;overflow-x:auto;}
+    .console .c-head{color:#94a3b8;}
+    .console .c-section{color:#7dd3fc;font-weight:600;}
+    .console .c-pass{color:#86efac;}
+    .console .c-info{color:#e2e8f0;}
+    .console .c-dim{color:#475569;}
+    .console .c-result{color:#fbbf24;font-weight:700;}
+    .console .c-sep{color:#334155;}
+
+    /* ── Assertion Detail ── */
+    .assert-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px;padding:16px 20px;}
+    .assert-item{border:1.5px solid #dcfce7;border-radius:7px;padding:10px 14px;background:#f0fdf4;display:flex;align-items:flex-start;gap:9px;}
+    .assert-icon{font-size:14px;flex-shrink:0;margin-top:1px;}
+    .assert-name{font-size:11.5px;font-weight:600;color:#15803d;line-height:1.4;}
+    .assert-desc{font-size:10px;color:#4ade80;margin-top:2px;}
+
+    /* ── Footer ── */
+    .footer{text-align:center;font-size:11px;color:#94a3b8;padding-top:8px;}
+    .footer strong{color:#64748b;}
+
+    @media print{body{background:#fff;padding:10px;}  .page-wrap{max-width:100%;}}
+  </style>
+</head>
+<body>
+<div class="page-wrap">
+
+  <!-- Header -->
+  <div class="header">
+    <div class="header-top">
+      <div>
+        <div class="sub">Pick &amp; Go — 맞춤형 여행 서비스 시스템 / 예약부</div>
+        <h1>예약 검증부(Sub 1) 단위 테스트 결과 보고서</h1>
+      </div>
+      <div class="badge-pass">✅ ALL PASS</div>
+    </div>
+    <div class="meta-row">
+      <div class="meta-item"><strong>실행일시</strong>&nbsp; 2026년 5월 1일 00:12</div>
+      <div class="meta-item"><strong>테스트 대상</strong>&nbsp; sub1_validator.py</div>
+      <div class="meta-item"><strong>실행 명령</strong>&nbsp; python -X utf8 test_sub1_validator.py</div>
+      <div class="meta-item"><strong>실행 환경</strong>&nbsp; Python 3.12 · Windows</div>
+    </div>
+  </div>
+
+  <!-- Summary -->
+  <div class="summary-cards">
+    <div class="scard pass">
+      <div class="scard-num green">12</div>
+      <div class="scard-label">통과 항목 (Passed)</div>
+    </div>
+    <div class="scard total">
+      <div class="scard-num blue">0</div>
+      <div class="scard-label">실패 항목 (Failed)</div>
+    </div>
+    <div class="scard tc">
+      <div class="scard-num purple">8</div>
+      <div class="scard-label">테스트 시나리오 (TC)</div>
+    </div>
+    <div class="scard time">
+      <div class="scard-num amber">&lt;1s</div>
+      <div class="scard-label">총 실행 시간</div>
+    </div>
+  </div>
+
+  <!-- TC Table -->
+  <div class="section">
+    <div class="sec-header">
+      <span class="sec-num">테스트 시나리오</span>
+      <span class="sec-title">8개 테스트 케이스 · 12개 검증 항목 전원 통과</span>
+    </div>
+    <table class="tc-table">
+      <thead>
+        <tr>
+          <th style="width:52px">번호</th>
+          <th style="width:72px">유형</th>
+          <th>테스트 시나리오</th>
+          <th>예상 오류 코드</th>
+          <th style="width:88px;text-align:center">결과</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><span class="tc-num">TC-01</span></td>
+          <td><span class="tc-badge normal">정상</span></td>
+          <td>올바른 정보로 정상 예약 요청<br><span style="font-size:10px;color:#94a3b8">user_id·trip_data·날짜·인원·결제수단 모두 유효 / duration=7일 계산</span></td>
+          <td><span style="color:#16a34a;font-size:11px">검증 통과 (4개 항목)</span></td>
+          <td style="text-align:center"><span class="result-pass"><span class="result-dot"></span>PASS</span></td>
+        </tr>
+        <tr>
+          <td><span class="tc-num">TC-02</span></td>
+          <td><span class="tc-badge error">오류</span></td>
+          <td>사용자 정보(user_id)가 공백인 경우</td>
+          <td><span class="code-tag">MISSING_USER_ID</span></td>
+          <td style="text-align:center"><span class="result-pass"><span class="result-dot"></span>PASS</span></td>
+        </tr>
+        <tr>
+          <td><span class="tc-num">TC-03</span></td>
+          <td><span class="tc-badge error">오류</span></td>
+          <td>선택된 여행 일정 데이터가 없는 경우</td>
+          <td><span class="code-tag">MISSING_TRIP_DATA</span></td>
+          <td style="text-align:center"><span class="result-pass"><span class="result-dot"></span>PASS</span></td>
+        </tr>
+        <tr>
+          <td><span class="tc-num">TC-04</span></td>
+          <td><span class="tc-badge error">오류</span></td>
+          <td>출발일이 오늘보다 이전 날짜인 경우</td>
+          <td><span class="code-tag">PAST_DATE</span></td>
+          <td style="text-align:center"><span class="result-pass"><span class="result-dot"></span>PASS</span></td>
+        </tr>
+        <tr>
+          <td><span class="tc-num">TC-05</span></td>
+          <td><span class="tc-badge error">오류</span></td>
+          <td>종료일이 출발일보다 앞선 경우</td>
+          <td><span class="code-tag">INVALID_DATE_RANGE</span></td>
+          <td style="text-align:center"><span class="result-pass"><span class="result-dot"></span>PASS</span></td>
+        </tr>
+        <tr>
+          <td><span class="tc-num">TC-06</span></td>
+          <td><span class="tc-badge error">오류</span></td>
+          <td>여행 인원이 0명으로 입력된 경우</td>
+          <td><span style="font-size:10.5px;color:#7c3aed">입력 단계에서 즉시 차단</span></td>
+          <td style="text-align:center"><span class="result-pass"><span class="result-dot"></span>PASS</span></td>
+        </tr>
+        <tr>
+          <td><span class="tc-num">TC-07</span></td>
+          <td><span class="tc-badge error">오류</span></td>
+          <td>허용되지 않은 결제 수단 입력 (<code style="font-size:10px">bitcoin</code>)</td>
+          <td><span class="code-tag">INVALID_PAYMENT_METHOD</span></td>
+          <td style="text-align:center"><span class="result-pass"><span class="result-dot"></span>PASS</span></td>
+        </tr>
+        <tr>
+          <td><span class="tc-num">TC-08</span></td>
+          <td><span class="tc-badge error">오류</span></td>
+          <td>날짜 형식이 잘못된 경우 (<code style="font-size:10px">2026/06/01</code>)</td>
+          <td><span class="code-tag">INVALID_DATE_FORMAT</span></td>
+          <td style="text-align:center"><span class="result-pass"><span class="result-dot"></span>PASS</span></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- Assertions -->
+  <div class="section">
+    <div class="sec-header">
+      <span class="sec-num">검증 항목 세부</span>
+      <span class="sec-title">12개 Assertion 전원 통과</span>
+    </div>
+    <div class="assert-grid">
+      <div class="assert-item">
+        <span class="assert-icon">✅</span>
+        <div><div class="assert-name">user_id 정확성 확인</div><div class="assert-desc">TC-01 · 정상 케이스</div></div>
+      </div>
+      <div class="assert-item">
+        <span class="assert-icon">✅</span>
+        <div><div class="assert-name">dest_city 정확성 확인</div><div class="assert-desc">TC-01 · 정상 케이스</div></div>
+      </div>
+      <div class="assert-item">
+        <span class="assert-icon">✅</span>
+        <div><div class="assert-name">duration 7일 계산 정확</div><div class="assert-desc">TC-01 · 날짜 계산</div></div>
+      </div>
+      <div class="assert-item">
+        <span class="assert-icon">✅</span>
+        <div><div class="assert-name">people 인원 확인</div><div class="assert-desc">TC-01 · 정상 케이스</div></div>
+      </div>
+      <div class="assert-item">
+        <span class="assert-icon">✅</span>
+        <div><div class="assert-name">MISSING_USER_ID 코드 발생</div><div class="assert-desc">TC-02 · 오류 코드 일치</div></div>
+      </div>
+      <div class="assert-item">
+        <span class="assert-icon">✅</span>
+        <div><div class="assert-name">retryable=False 확인</div><div class="assert-desc">TC-02 · 재시도 불가</div></div>
+      </div>
+      <div class="assert-item">
+        <span class="assert-icon">✅</span>
+        <div><div class="assert-name">MISSING_TRIP_DATA 코드 발생</div><div class="assert-desc">TC-03 · 오류 코드 일치</div></div>
+      </div>
+      <div class="assert-item">
+        <span class="assert-icon">✅</span>
+        <div><div class="assert-name">PAST_DATE 코드 발생</div><div class="assert-desc">TC-04 · 과거 날짜 차단</div></div>
+      </div>
+      <div class="assert-item">
+        <span class="assert-icon">✅</span>
+        <div><div class="assert-name">INVALID_DATE_RANGE 코드 발생</div><div class="assert-desc">TC-05 · 날짜 역전 차단</div></div>
+      </div>
+      <div class="assert-item">
+        <span class="assert-icon">✅</span>
+        <div><div class="assert-name">인원 0명 입력 단계 차단</div><div class="assert-desc">TC-06 · Pydantic 검증</div></div>
+      </div>
+      <div class="assert-item">
+        <span class="assert-icon">✅</span>
+        <div><div class="assert-name">INVALID_PAYMENT_METHOD 코드 발생</div><div class="assert-desc">TC-07 · 결제 수단 차단</div></div>
+      </div>
+      <div class="assert-item">
+        <span class="assert-icon">✅</span>
+        <div><div class="assert-name">INVALID_DATE_FORMAT 코드 발생</div><div class="assert-desc">TC-08 · 형식 오류 차단</div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Console Output -->
+  <div class="section">
+    <div class="sec-header">
+      <span class="sec-num">실행 로그</span>
+      <span class="sec-title">테스트 실행 콘솔 출력 (원본)</span>
+    </div>
+    <div class="console">
+      <div class="c-sep">=======================================================</div>
+      <div class="c-head">  Sub1 예약 검증부 (sub1_validator.py) 테스트</div>
+      <div class="c-sep">=======================================================</div>
+      <br>
+      <div class="c-section">[TC-01] 정상 요청 → 검증 통과</div>
+      <div class="c-dim">[Sub1] OK - user:user_001, 서울->도쿄, 2026-05-02~2026-05-08(7days), 2pax</div>
+      <div class="c-pass">  ✅ [user_id 확인]</div>
+      <div class="c-pass">  ✅ [dest_city 확인]</div>
+      <div class="c-pass">  ✅ [duration 계산] duration=7</div>
+      <div class="c-pass">  ✅ [people 확인]</div>
+      <br>
+      <div class="c-section">[TC-02] user_id 누락 → MISSING_USER_ID 오류</div>
+      <div class="c-pass">  ✅ [MISSING_USER_ID 코드] code=MISSING_USER_ID</div>
+      <div class="c-pass">  ✅ [retryable=False]</div>
+      <br>
+      <div class="c-section">[TC-03] trip_data 누락 → MISSING_TRIP_DATA 오류</div>
+      <div class="c-pass">  ✅ [MISSING_TRIP_DATA 코드] code=MISSING_TRIP_DATA</div>
+      <br>
+      <div class="c-section">[TC-04] 출발일이 어제 → PAST_DATE 오류</div>
+      <div class="c-pass">  ✅ [PAST_DATE 코드] code=PAST_DATE</div>
+      <br>
+      <div class="c-section">[TC-05] 종료일이 시작일보다 이전 → INVALID_DATE_RANGE 오류</div>
+      <div class="c-pass">  ✅ [INVALID_DATE_RANGE 코드] code=INVALID_DATE_RANGE</div>
+      <br>
+      <div class="c-section">[TC-06] 인원 0명 → Pydantic 검증 오류</div>
+      <div class="c-pass">  ✅ [Pydantic 검증으로 거부] ValidationError</div>
+      <br>
+      <div class="c-section">[TC-07] 결제 수단 'bitcoin' → INVALID_PAYMENT_METHOD 오류</div>
+      <div class="c-pass">  ✅ [INVALID_PAYMENT_METHOD 코드] code=INVALID_PAYMENT_METHOD</div>
+      <br>
+      <div class="c-section">[TC-08] 날짜 형식 오류 '2026/06/01' → INVALID_DATE_FORMAT</div>
+      <div class="c-pass">  ✅ [INVALID_DATE_FORMAT 코드] code=INVALID_DATE_FORMAT</div>
+      <br>
+      <div class="c-sep">=======================================================</div>
+      <div class="c-result">  결과: 12개 통과 / 0개 실패</div>
+      <div class="c-sep">=======================================================</div>
+    </div>
+  </div>
+
+  <div class="footer">
+    테스트 스크립트: <strong>test_sub1_validator.py</strong> &nbsp;|&nbsp;
+    대상 모듈: <strong>app/reservation/sub1_validator.py</strong> &nbsp;|&nbsp;
+    실행일: <strong>2026-05-01</strong>
+  </div>
+
+</div>
+</body>
+</html>

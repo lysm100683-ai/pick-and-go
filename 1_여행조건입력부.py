@@ -34,7 +34,7 @@ if "form_data" not in st.session_state:
         "local_transport": "자차",
         "pace": "보통", "walk_minutes": 45,
         "lodging_types": ["호텔"], "star_rating": 4, "price_per_night_manwon": 20,
-        "num_hotels": 1, # 희망 숙소 수
+        "num_hotels": 1,
         
         # 음식 및 편의
         "food_prefs": [], "food_allergy_text": "",
@@ -42,10 +42,17 @@ if "form_data" not in st.session_state:
         
         # Step 3: 고급 설정
         "keywords": "", "seat_pref": "무관", "baggage": "기내만", "english_ok": False,
-        
-        # 누락 방지용 기본값
         "crowd_avoid": "보통", "temp_range": (15,25), "rainy_ok": False, 
-        "time_constraints": "", "max_transfers": 1, "visa_free": False
+        "time_constraints": "", "max_transfers": 1, "visa_free": False,
+
+        # Step 4: 추가 입력형 조건
+        "daily_budget_manwon": 30,
+        "preferred_airline": "",
+        "interest_places": "",
+        "trip_purpose": "",
+        "notes": "",
+        "arrival_time_pref": "",
+        "departure_time_pref": "",
     }
 
 # 4. 여행 조건 입력 폼
@@ -158,8 +165,65 @@ with st.form("travel_form"):
         max_transfers_val = st.number_input("최대 환승 횟수 (교통)", 0, 5, st.session_state["form_data"]["max_transfers"])
         visa_free_val = st.checkbox("비자 불필요 지역 선호", st.session_state["form_data"]["visa_free"])
 
+    # --- Step 4: 추가 입력형 조건 ---
+    st.markdown("---")
+    st.header("4. 추가 요청 사항")
+    st.caption("입력형 조건 20개 중 나머지 상세 항목입니다. (선택 사항)")
 
-    submitted = st.form_submit_button("일정 생성 시작! (Server 전송)", use_container_width=True, type="primary")
+    col_s4a, col_s4b = st.columns(2)
+    trip_purpose_val = col_s4a.text_input(
+        "✈️ 여행 목적 / 테마",
+        st.session_state["form_data"]["trip_purpose"],
+        placeholder="예) 신혼여행, 가족 추억 여행, 소울리쳐"
+    )
+    preferred_airline_val = col_s4b.text_input(
+        "✈️ 선호 항공사",
+        st.session_state["form_data"]["preferred_airline"],
+        placeholder="예) 대한항공, 아시아나, 제주항공 (없으면 빈칸)"
+    )
+
+    col_s4c, col_s4d = st.columns(2)
+    arrival_time_pref_val = col_s4c.text_input(
+        "🕒 도착 희망 시간대",
+        st.session_state["form_data"]["arrival_time_pref"],
+        placeholder="예) 오전 10시 이전"
+    )
+    departure_time_pref_val = col_s4d.text_input(
+        "🕒 출발 희망 시간대",
+        st.session_state["form_data"]["departure_time_pref"],
+        placeholder="예) 오후 3시 이후"
+    )
+
+    interest_places_val = st.text_input(
+        "📍 꼭 가보고 싶은 장소 / 명소",
+        st.session_state["form_data"]["interest_places"],
+        max_chars=500,
+        placeholder="예) 성산일출, 에메랄드 성, OO 맛집 거리"
+    )
+
+    food_allergy_val = st.text_input(
+        "🍴 음식 알레르기 / 기피 음식",
+        st.session_state["form_data"]["food_allergy_text"],
+        max_chars=1000,
+        placeholder="예) 낙지류 알레르기, 돼고기 불가, 비건"
+    )
+
+    daily_budget_val = st.number_input(
+        "💰 하루 완 예산 (만원)",
+        min_value=1, max_value=500,
+        value=st.session_state["form_data"]["daily_budget_manwon"],
+        help="식비+교통비+입장료 등 숙소를 제외한 하루 예산"
+    )
+
+    notes_val = st.text_area(
+        "📝 기타 특이사항 / 요청사항",
+        st.session_state["form_data"]["notes"],
+        max_chars=1000,
+        height=80,
+        placeholder="예) 휴스 차항이 있어 무리하지 않은 일정으로 짜주세요"
+    )
+
+    submitted = st.form_submit_button("🔍 일정 생성 시작!", use_container_width=True, type="primary")
 
 # 5. 폼 제출 처리
 if submitted:
@@ -168,24 +232,27 @@ if submitted:
         "dep_city": dep, "dest_city": dest,
         "start_date": str(s_date), "end_date": str(e_date),
         "people": people, "companions": companions, "budget_level": budget_level,
-        "style": style, "transport": transport, 
-        "local_transport": local_transport, 
-        "pace": pace, 
+        "style": style, "transport": transport,
+        "local_transport": local_transport,
+        "pace": pace,
         "lodging_types": lodging_types, "star_rating": star_rating, "price_per_night_manwon": price_per_night,
-        
-        # 🚀 2-1. num_hotels_input의 최신 값을 세션에 저장하여 유지되도록 함
         "num_hotels": num_hotels_input,
-        
-        # ⚠️ (수정) 이 값들은 폼에 없지만, 세션에서 그대로 유지하거나 새 값을 사용
-        "food_prefs": st.session_state["form_data"]["food_prefs"], 
-        "food_allergy_text": st.session_state["form_data"]["food_allergy_text"],
-        "barrier_free": st.session_state["form_data"]["barrier_free"], 
-        
-        # ⚠️ (수정) 폼에서 입력받은 최신 값을 사용
+        "food_prefs": st.session_state["form_data"]["food_prefs"],
+        "barrier_free": st.session_state["form_data"]["barrier_free"],
         "with_kids": with_kids, "stroller": stroller, "photo_spot": photo_spot,
         "keywords": keywords, "seat_pref": seat_pref, "baggage": baggage, "english_ok": english_ok,
-        "walk_minutes": walk_minutes_val, "crowd_avoid": crowd_avoid_val, "temp_range": temp_range_val, 
-        "rainy_ok": rainy_ok_val, "time_constraints": time_constraints_val, "max_transfers": max_transfers_val, "visa_free": visa_free_val
+        "walk_minutes": walk_minutes_val, "crowd_avoid": crowd_avoid_val, "temp_range": temp_range_val,
+        "rainy_ok": rainy_ok_val, "time_constraints": time_constraints_val,
+        "max_transfers": max_transfers_val, "visa_free": visa_free_val,
+        # Step 4 신규 필드
+        "food_allergy_text": food_allergy_val,
+        "daily_budget_manwon": daily_budget_val,
+        "preferred_airline": preferred_airline_val,
+        "interest_places": interest_places_val,
+        "trip_purpose": trip_purpose_val,
+        "notes": notes_val,
+        "arrival_time_pref": arrival_time_pref_val,
+        "departure_time_pref": departure_time_pref_val,
     }
     st.session_state["form_data"].update(updated_data)
 
