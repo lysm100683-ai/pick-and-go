@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Plane, Calendar, Users, MapPin, Wallet, Compass, Car, Home as HomeIcon, Camera, Utensils, Briefcase, Info, Sparkles } from "lucide-react";
 import { format, addDays } from "date-fns";
 import { useRouter } from "next/navigation";
