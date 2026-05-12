@@ -9,7 +9,7 @@ from geoalchemy2 import WKTElement
 from db.connection import get_db_session
 from db.models import Place, MovementCache
 from config import Config
-from datetime import datetime
+from datetime import datetime, timedelta
 import concurrent.futures
 import requests
 import googlemaps
@@ -284,19 +284,24 @@ def get_movement_cache(origin_lat: float, origin_lng: float,
         
         # 정방향 또는 역방향 캐시 검색 (거리 기반으로 매칭)
         # Config.CACHE_MATCH_TOLERANCE_METERS 이내면 동일 좌표로 간주
+        # 180일(6개월) 캐시 유통기한(TTL) 적용 (오래된 데이터는 버리고 새로 API 호출)
+        limit_date = datetime.now() - timedelta(days=180)
+
         cache = session.query(MovementCache).filter(
             or_(
                 and_(
-                    # 정방향: origin → dest
-                    func.ST_Distance(MovementCache.origin, origin_point) < Config.CACHE_MATCH_TOLERANCE_METERS,
-                    func.ST_Distance(MovementCache.destination, dest_point) < Config.CACHE_MATCH_TOLERANCE_METERS,
-                    MovementCache.mode == mode
+                    # 정방향: origin → dest (ST_DWithin으로 공간 인덱스(GiST) 적극 활용)
+                    func.ST_DWithin(MovementCache.origin, origin_point, Config.CACHE_MATCH_TOLERANCE_METERS),
+                    func.ST_DWithin(MovementCache.destination, dest_point, Config.CACHE_MATCH_TOLERANCE_METERS),
+                    MovementCache.mode == mode,
+                    MovementCache.created_at >= limit_date
                 ),
                 and_(
                     # 역방향: dest → origin
-                    func.ST_Distance(MovementCache.origin, dest_point) < Config.CACHE_MATCH_TOLERANCE_METERS,
-                    func.ST_Distance(MovementCache.destination, origin_point) < Config.CACHE_MATCH_TOLERANCE_METERS,
-                    MovementCache.mode == mode
+                    func.ST_DWithin(MovementCache.origin, dest_point, Config.CACHE_MATCH_TOLERANCE_METERS),
+                    func.ST_DWithin(MovementCache.destination, origin_point, Config.CACHE_MATCH_TOLERANCE_METERS),
+                    MovementCache.mode == mode,
+                    MovementCache.created_at >= limit_date
                 )
             )
         ).first()
@@ -336,6 +341,24 @@ def save_movement_cache(origin_lat: float, origin_lng: float,
         )
         session.add(new_cache)
         logger.info(f"새 이동 시간 캐시 저장: {duration}초 (mode: {mode}, is_korea: {is_korea})")
+
+
+def cleanup_old_movement_cache(days: int = 180):
+    """
+    유통기한(TTL)이 지난 과거 이동시간 캐시 데이터를 DB에서 영구 삭제합니다.
+    (앱 구동 시나 DB 업데이트 시 비동기적으로 실행하여 DB 찌꺼기를 방지)
+    """
+    limit_date = datetime.now() - timedelta(days=days)
+    try:
+        with get_db_session() as session:
+            deleted_count = session.query(MovementCache).filter(
+                MovementCache.created_at < limit_date
+            ).delete()
+            session.commit()
+            if deleted_count > 0:
+                logger.info(f"유통기한 경과된 과거 이동시간 캐시 {deleted_count}건 삭제 완료 ({days}일 초과 데이터).")
+    except Exception as e:
+        logger.error(f"오래된 이동시간 캐시 삭제 중 오류 발생: {e}", exc_info=True)
 
 
 # 🚀 기존 backend.py의 API 호출 함수들을 그대로 복사 (travel_logic.py에서 사용)
@@ -388,10 +411,20 @@ def get_real_duration_kakao(lat1, lng1, lat2, lng2, mode='driving'):
             duration_seconds = data['routes'][0].get('summary', {}).get('duration')
         
         if duration_seconds is None:
-            logger.warning(f"Kakao API 응답에 duration 없음: {data}")
-            return 999999
+            # result_code 103(경로 없음) 등 Kakao 실패 시 —
+            # Google Maps API를 폴백 호출하는 대신, Haversine 직선거리로 이동시간 추정.
+            # (도시 내에서는 실제 도로거리의 약 1.3배가 직선거리)
+            import math
+            R = 6371
+            dlat = math.radians(lat2 - lat1)
+            dlng = math.radians(lng2 - lng1)
+            a = math.sin(dlat/2)**2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlng/2)**2
+            dist_km = 2 * R * math.asin(math.sqrt(a))
+            speed_kmh = 30 if mode == 'driving' else 4
+            duration_seconds = max(300, int(dist_km / speed_kmh * 3600 * 1.3))  # 최소 5분
+            logger.info(f"Kakao duration 없음 → Haversine 추정: {dist_km:.2f}km → {duration_seconds}초 (result: {data.get('routes', [{}])[0].get('result_code', '?') if data.get('routes') else data.get('msg', '')})")            
         
-        # 캐시 저장
+        # 쳠시 저장
         save_movement_cache(lat1, lng1, lat2, lng2, mode, duration_seconds, is_korea=True)
         logger.info(f"Kakao API 이동 시간 조회 성공: {duration_seconds}초 (mode: {mode})")
         return duration_seconds
@@ -411,7 +444,10 @@ def get_real_duration_kakao(lat1, lng1, lat2, lng2, mode='driving'):
 
 
 def get_real_duration_google_bulk(lat1, lng1, candidates, mode='driving'):
-    """Google Directions API를 사용하여 여러 목적지까지의 이동 시간을 조회"""
+    """
+    Google Distance Matrix API로 여러 목적지까지의 이동 시간을 한 번에 조회
+    (기존: gmaps.directions() N번 반복 → 개선: gmaps.distance_matrix() 1번)
+    """
     
     if lat1 == 0.0 or lng1 == 0.0:
         logger.warning(f"유효하지 않은 출발지 좌표: ({lat1}, {lng1})")
@@ -422,51 +458,270 @@ def get_real_duration_google_bulk(lat1, lng1, candidates, mode='driving'):
         return [(30*60, p) for p in candidates]
     
     gmaps = googlemaps.Client(key=Config.GMAPS_API_KEY)
-    results = []
-    
-    for p in candidates:
+    results_map = {}   # dest index → duration
+    uncached_indices = []  # 쳠시 미스 candidates의 원래 index
+
+    # 1단계: 쳠시에서 먼저 확인
+    for i, p in enumerate(candidates):
         if p['lat'] == 0.0 or p['lng'] == 0.0:
-            logger.warning(f"유효하지 않은 목적지 좌표: {p.get('name', 'Unknown')} ({p['lat']}, {p['lng']})")
-            results.append((999999, p))
+            results_map[i] = (999999, p)
             continue
-        
-        # 캐시 확인
         cached = get_movement_cache(lat1, lng1, p['lat'], p['lng'], mode)
         if cached is not None:
-            logger.debug(f"캐시된 이동 시간 사용: {p.get('name', 'Unknown')} - {cached}초")
-            results.append((cached, p))
-            continue
-        
+            logger.debug(f"쳠시된 이동 시간 사용: {p.get('name', 'Unknown')} - {cached}초")
+            results_map[i] = (cached, p)
+        else:
+            uncached_indices.append(i)
+
+    # 2단계: 쳠시 미스는 Distance Matrix API 단일 호출로 일괄 조회
+    if uncached_indices:
+        uncached_places = [candidates[i] for i in uncached_indices]
         try:
-            directions_result = gmaps.directions(
-                origin=f"{lat1},{lng1}",
-                destination=f"{p['lat']},{p['lng']}",
+            matrix = gmaps.distance_matrix(
+                origins=[f"{lat1},{lng1}"],
+                destinations=[f"{p['lat']},{p['lng']}" for p in uncached_places],
                 mode=mode,
                 departure_time=datetime.now()
             )
-            
-            duration_seconds = 999999
-            if directions_result and directions_result[0]['legs']:
-                duration_seconds = directions_result[0]['legs'][0]['duration']['value']
-            else:
-                logger.warning(f"Google API 응답에 경로 없음: {p.get('name', 'Unknown')}")
-            
-            save_movement_cache(lat1, lng1, p['lat'], p['lng'], mode, duration_seconds, is_korea=False)
-            results.append((duration_seconds, p))
-            logger.info(f"Google API 이동 시간 조회 성공: {p.get('name', 'Unknown')} - {duration_seconds}초")
-            
-        except googlemaps.exceptions.ApiError as e:
-            logger.error(f"Google API 에러 ({p.get('name', 'Unknown')}): {e}")
-            results.append((999999, p))
-        except googlemaps.exceptions.Timeout:
-            logger.error(f"Google API 타임아웃: {p.get('name', 'Unknown')}")
-            results.append((999999, p))
+            logger.info(f"Google Distance Matrix API 1회 호출로 {len(uncached_places)}개 검색 완료")
+
+            row = matrix.get('rows', [{}])[0]
+            for j, p in enumerate(uncached_places):
+                orig_i = uncached_indices[j]
+                try:
+                    element = row['elements'][j]
+                    if element['status'] == 'OK':
+                        duration_seconds = element['duration']['value']
+                    else:
+                        logger.warning(f"Google Matrix 요소 실패 ({element.get('status')}): {p.get('name', 'Unknown')}")
+                        duration_seconds = 999999
+                except (KeyError, IndexError) as e:
+                    logger.warning(f"Google Matrix 재파싱 오류: {e}")
+                    duration_seconds = 999999
+
+                if duration_seconds != 999999:
+                    save_movement_cache(lat1, lng1, p['lat'], p['lng'], mode, duration_seconds, is_korea=False)
+                results_map[orig_i] = (duration_seconds, p)
+
         except Exception as e:
-            logger.error(f"Google API 예상치 못한 오류 ({p.get('name', 'Unknown')}): {e}", exc_info=True)
-            results.append((999999, p))
-    
-    return results
+            logger.error(f"Google Distance Matrix API 오류: {e}", exc_info=True)
+            for i, p in zip(uncached_indices, uncached_places):
+                results_map[i] = (999999, p)
+
+    # 원래 순서 유지
+    return [results_map[i] for i in range(len(candidates))]
 
 
-# 🚀 TODO: fetch_google, fetch_kakao 등 데이터 수집 함수도 이식 필요
-# 현재는 travel_logic.py가 backend.py를 import하므로 점진적으로 교체
+# ---------------------------------------------------------------------------
+# 데이터 수집 함수 (기존 backend.py에서 이식, SQLite→PostGIS 교체)
+# ---------------------------------------------------------------------------
+
+# 수집 데이터 임시 버퍼 (save_bulk_data() 호출 전까지 DB 미저장)
+_temp_data_buffer: list = []
+
+
+def _buffer_place(data: dict):
+    """
+    수집된 장소 데이터를 메모리 버퍼에 임시 저장.
+    save_bulk_data() 호출 시 일괄 UPSERT됩니다.
+    """
+    global _temp_data_buffer
+    if not any(item['id'] == data['id'] for item in _temp_data_buffer):
+        data.setdefault('desc', '')
+        data.setdefault('rating', 0.0)
+        data.setdefault('address', '')
+        data.setdefault('img_url', '')
+        _temp_data_buffer.append(data)
+
+
+def save_bulk_data() -> int:
+    """
+    버퍼에 쌓인 장소 데이터를 PostgreSQL에 일괄 UPSERT합니다.
+    중복 id는 rating, img_url만 갱신합니다.
+
+    Returns:
+        UPSERT된 건수
+    """
+    global _temp_data_buffer
+    if not _temp_data_buffer:
+        return 0
+
+    from sqlalchemy.dialects.postgresql import insert as pg_insert
+
+    rows = []
+    for data in _temp_data_buffer:
+        lat = float(data.get('lat', 0.0))
+        lng = float(data.get('lng', 0.0))
+        if lat == 0.0 or lng == 0.0:
+            continue  # 좌표 없는 데이터 제외
+        rows.append({
+            'id':          str(data['id']),
+            'source':      data['source'],
+            'name':        data['name'],
+            'city':        data['city'],
+            'category':    data.get('category', ''),
+            'location':    WKTElement(f'SRID=4326;POINT({lng} {lat})', srid=4326),
+            'address':     data.get('address', ''),
+            'rating':      float(data.get('rating', 0.0)),
+            'img_url':     data.get('img_url', ''),
+            'description': data.get('desc', ''),
+        })
+
+    if not rows:
+        _temp_data_buffer = []
+        return 0
+
+    # PostgreSQL 바인딩 한계(32767) 기준: 컬럼 9개 → 최대 3000건/배치
+    BATCH_SIZE = 3000
+    added_count = 0
+
+    try:
+        with get_db_session() as session:
+            for i in range(0, len(rows), BATCH_SIZE):
+                batch = rows[i:i + BATCH_SIZE]
+                stmt = pg_insert(Place).values(batch)
+                stmt = stmt.on_conflict_do_update(
+                    index_elements=['id'],
+                    set_={
+                        'rating':  stmt.excluded.rating,
+                        'img_url': stmt.excluded.img_url,
+                    }
+                )
+                session.execute(stmt)
+            added_count = len(rows)
+        logger.info(f"save_bulk_data: {added_count}건 UPSERT 완료")
+    except Exception as e:
+        logger.error(f"save_bulk_data UPSERT 실패: {e}", exc_info=True)
+        added_count = 0
+    finally:
+        _temp_data_buffer = []
+
+    return added_count
+
+
+def fetch_google(city: str, keywords: list):
+    """
+    Google Places API로 장소 데이터 수집 → 버퍼(_temp_data_buffer)에 임시 저장
+    """
+    if not Config.GMAPS_API_KEY or Config.GMAPS_API_KEY == 'YOUR_GOOGLE_MAPS_API_KEY':
+        return
+
+    gmaps = googlemaps.Client(key=Config.GMAPS_API_KEY)
+
+    for keyword in keywords:
+        try:
+            res = gmaps.places(query=f"{city} {keyword}")
+
+            status = res.get('status')
+            if status != 'OK' and status != 'ZERO_RESULTS':
+                logger.warning(f"[Google API] '{keyword}' 검색 실패. Status: {status}")
+            if status != 'OK':
+                continue
+
+            for p in res.get('results', []):
+                img = ""
+                if 'photos' in p:
+                    ref = p['photos'][0]['photo_reference']
+                    img = (f"https://maps.googleapis.com/maps/api/place/photo"
+                           f"?maxwidth=400&photoreference={ref}&key={Config.GMAPS_API_KEY}")
+
+                lat = p['geometry']['location'].get('lat') or 0.0
+                lng = p['geometry']['location'].get('lng') or 0.0
+
+                _buffer_place({
+                    "id":       f"google_{p['place_id']}",
+                    "source":   "google",
+                    "name":     p['name'],
+                    "city":     city,
+                    "category": p.get('types', ['place'])[0],
+                    "lat":      lat,
+                    "lng":      lng,
+                    "address":  p.get('formatted_address', ''),
+                    "rating":   p.get('rating', 0.0),
+                    "img_url":  img,
+                    "desc":     "Google",
+                })
+        except Exception as e:
+            logger.error(f"[Google API] '{keyword}' 처리 중 오류: {e}")
+
+
+def fetch_kakao(city: str, keywords: list):
+    """
+    Kakao 로컬 API로 장소 데이터 수집 → 버퍼(_temp_data_buffer)에 임시 저장 (국내 전용)
+    """
+    if not Config.KAKAO_REST_KEY or Config.KAKAO_REST_KEY == 'YOUR_KAKAO_REST_API_KEY':
+        return
+
+    headers = {"Authorization": f"KakaoAK {Config.KAKAO_REST_KEY}"}
+
+    for keyword in keywords:
+        try:
+            res = requests.get(
+                "https://dapi.kakao.com/v2/local/search/keyword.json",
+                headers=headers,
+                params={"query": f"{city} {keyword}", "size": 15},
+                timeout=5,
+            )
+            for p in res.json().get('documents', []):
+                _buffer_place({
+                    "id":       f"kakao_{p['id']}",
+                    "source":   "kakao",
+                    "name":     p['place_name'],
+                    "city":     city,
+                    "category": p['category_name'].split('>')[-1].strip(),
+                    "lat":      float(p.get('y', 0.0)),
+                    "lng":      float(p.get('x', 0.0)),
+                    "address":  p['road_address_name'],
+                    "rating":   0.0,
+                    "img_url":  p['place_url'],
+                    "desc":     p['phone'],
+                })
+        except Exception as e:
+            logger.error(f"[Kakao API] '{keyword}' 처리 중 오류: {e}")
+
+
+def fetch_tourapi(city: str):
+    """
+    한국관광공사 TourAPI로 관광지 데이터 수집 (국내 전용)
+    TODO: TourAPI 서비스키 발급 후 구현 필요
+          - 국내 관광지 공식 데이터로 Google/Kakao 누락분 보완 목적
+          - data.go.kr 에서 '국문관광정보서비스' 신청
+    """
+    pass
+
+
+def fetch_all_data(city: str, keywords: list,
+                   api_keys=None, lat: float = 0, lng: float = 0,
+                   is_domestic: bool = True) -> dict:
+    """
+    데이터 수집 진입점 — 병렬 수집 후 버퍼를 일괄 UPSERT합니다.
+
+    Args:
+        city: 수집 대상 도시
+        keywords: 검색 키워드 리스트
+        api_keys: (미사용, 하위 호환용)
+        lat, lng: 해외 도시 좌표 (미사용, 하위 호환용)
+        is_domestic: 국내 여부 (Kakao/TourAPI 호출 여부 결정)
+
+    Returns:
+        {"added_count": int, "final_count": int}
+    """
+    logger.info(f"[Update] '{city}' 데이터 수집 시작...")
+
+    # Google 수집을 키워드별 병렬 처리
+    tasks = [lambda k=kw: fetch_google(city, [k]) for kw in keywords]
+
+    if is_domestic:
+        fetch_kakao(city, keywords)
+        fetch_tourapi(city)
+    # fetch_amadeus는 Phase 4 예약 기능 구현 시 추가 예정
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+        futures = [executor.submit(task) for task in tasks]
+        concurrent.futures.wait(futures)
+
+    added_count = save_bulk_data()
+    final_count = len(get_places(city))
+
+    logger.info(f"[Finish] '{city}' 완료. 추가: {added_count}건, 최종: {final_count}건")
+    return {"added_count": added_count, "final_count": final_count}
