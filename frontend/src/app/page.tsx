@@ -97,13 +97,20 @@ export default function Home() {
     e.preventDefault();
     setIsSubmitting(true);
     setErrorMsg("");
+
+    // AbortController: 120초 타임아웃 (Render cold start 최대 50초 + 처리 시간 고려)
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 120_000);
     
     try {
       const res = await fetch("https://pick-and-go-1.onrender.com/api/v1/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(formData),
+        signal: controller.signal,
       });
+
+      clearTimeout(timeoutId);
 
       if (!res.ok) {
         const errData = await res.json().catch(() => ({}));
@@ -121,8 +128,15 @@ export default function Home() {
       router.push("/result");
       
     } catch (err: any) {
+      clearTimeout(timeoutId);
       console.error(err);
-      setErrorMsg(err.message || "일정 생성 중 오류가 발생했습니다.");
+      if (err.name === "AbortError") {
+        setErrorMsg("⏱️ 응답 시간 초과 (120초). 서버가 준비 중일 수 있습니다. 잠시 후 다시 시도해주세요.");
+      } else if (err.message === "Failed to fetch") {
+        setErrorMsg("🔌 서버에 연결할 수 없습니다. 잠시 후 다시 시도해주세요. (서버 깨우는 중일 수 있음)");
+      } else {
+        setErrorMsg(err.message || "일정 생성 중 오류가 발생했습니다.");
+      }
       setIsSubmitting(false);
     }
   };
