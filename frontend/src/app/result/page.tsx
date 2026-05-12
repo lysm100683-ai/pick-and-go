@@ -64,6 +64,67 @@ function MapPanel({ markers, path, googleKey }: {
   );
 }
 
+// ── Kakao Maps 렌더러 (iframe 방식, 국내 여행 전용) ────────────
+const DOMESTIC_CITIES = ["서울","제주","부산","강원","강릉","속초","여수","경주","전주","인천","대구","광주","수원","울산"];
+
+function KakaoMapPanel({ markers, path, kakaoKey }: {
+  markers: { lat: number; lng: number; title: string }[];
+  path:    { lat: number; lng: number }[];
+  kakaoKey: string;
+}) {
+  const mapHtml = `<!DOCTYPE html><html><head>
+  <style>
+    html,body{margin:0;height:100%;font-family:sans-serif;}
+    #map{height:100%;}
+    .iw{padding:5px 10px;font-size:13px;font-weight:700;color:#1e3a8a;white-space:nowrap;border-radius:8px;background:#fff;box-shadow:0 2px 8px rgba(0,0,0,.15);}
+  </style>
+  </head><body>
+  <div id="map"></div>
+  <script>
+  var M=${JSON.stringify(markers)};
+  var P=${JSON.stringify(path)};
+  </script>
+  <script src="https://dapi.kakao.com/v2/maps/sdk.js?appkey=${kakaoKey}&autoload=false"></script>
+  <script>
+  kakao.maps.load(function(){
+    if(!M.length){document.body.innerHTML='<div style="display:flex;align-items:center;justify-content:center;height:100%;color:#94a3b8;font-size:14px;">표시할 장소가 없습니다.</div>';return;}
+    var avg={lat:M.reduce(function(s,m){return s+m.lat;},0)/M.length,lng:M.reduce(function(s,m){return s+m.lng;},0)/M.length};
+    var map=new kakao.maps.Map(document.getElementById('map'),{center:new kakao.maps.LatLng(avg.lat,avg.lng),level:5});
+    var bounds=new kakao.maps.LatLngBounds();
+    if(P.length>1){
+      new kakao.maps.Polyline({path:P.map(function(p){return new kakao.maps.LatLng(p.lat,p.lng);}),map:map,strokeWeight:4,strokeColor:'#3B82F6',strokeOpacity:0.8,strokeStyle:'solid'});
+    }
+    M.forEach(function(m,i){
+      var pos=new kakao.maps.LatLng(m.lat,m.lng);
+      var marker=new kakao.maps.Marker({position:pos,map:map});
+      var iw=new kakao.maps.InfoWindow({content:'<div class="iw">'+(i+1)+'. '+m.title+'</div>'});
+      kakao.maps.event.addListener(marker,'click',function(){iw.open(map,marker);});
+      bounds.extend(pos);
+    });
+    if(M.length>1) map.setBounds(bounds);
+  });
+  </script>
+  </body></html>`;
+
+  if (!kakaoKey) {
+    return (
+      <div className="w-full h-full flex flex-col items-center justify-center bg-slate-50 rounded-3xl border-2 border-dashed border-slate-200 text-slate-400">
+        <Map className="w-14 h-14 mb-3 text-blue-200" />
+        <p className="font-bold text-slate-500">카카오 지도를 불러올 수 없습니다</p>
+        <p className="text-sm mt-1">Kakao Maps API Key가 필요합니다.</p>
+      </div>
+    );
+  }
+
+  return (
+    <iframe
+      srcDoc={mapHtml}
+      className="w-full h-full rounded-3xl border border-slate-200 shadow-lg"
+      sandbox="allow-scripts allow-same-origin"
+    />
+  );
+}
+
 // ── 장소 카드 ────────────────────────────────────────────────
 function PlaceCard({ place, index, destCity }: { place: any; index: number; destCity: string }) {
   const url = place.url || `https://www.google.com/search?q=${encodeURIComponent(place.name + " " + destCity)}`;
@@ -116,15 +177,23 @@ export default function ResultPage() {
   const [userData, setUserData]           = useState<any>(null);
   const [isLoading, setIsLoading]         = useState(true);
   const [expandedDays, setExpandedDays]   = useState<number[]>([]);
-  const GOOGLE_KEY                        = process.env.NEXT_PUBLIC_GOOGLE_MAPS_KEY || "";
+  const [mapType, setMapType]             = useState<"kakao" | "google">("kakao");
+  const GOOGLE_KEY = process.env.NEXT_PUBLIC_GOOGLE_MAPS_KEY || "";
+  const KAKAO_KEY  = process.env.NEXT_PUBLIC_KAKAO_MAPS_KEY  || "";
 
   useEffect(() => {
     const savedResult = localStorage.getItem("api_result");
     const savedForm   = localStorage.getItem("form_data");
     if (savedResult && savedForm) {
       try {
-        setApiData(JSON.parse(savedResult));
-        setUserData(JSON.parse(savedForm));
+        const parsedData = JSON.parse(savedResult);
+        const parsedForm = JSON.parse(savedForm);
+        setApiData(parsedData);
+        setUserData(parsedForm);
+        // 국내 여행이면 카카오 지도, 해외면 구글 지도를 기본으로 설정
+        const dest = parsedForm.dest_city || "";
+        const domestic = DOMESTIC_CITIES.some((c: string) => dest.includes(c));
+        setMapType(domestic ? "kakao" : "google");
       } catch {}
     }
     setIsLoading(false);
@@ -347,26 +416,63 @@ export default function ResultPage() {
           {/* 지도 */}
           <div className="lg:col-span-7">
             <div className="sticky top-24">
-              <div className="flex items-center justify-between mb-4">
+
+              {/* 헤더: 제목 + Day 필터 + 지도 전환 토글 */}
+              <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
                 <h2 className="text-xl font-bold flex items-center gap-2 text-slate-800">
                   <Map className="w-5 h-5 text-purple-500" /> 이동 동선
                 </h2>
-                <div className="flex items-center gap-2">
-                  <MapPin className="w-4 h-4 text-slate-400" />
-                  <select
-                    value={selectedDay === "all" ? "all" : selectedDay}
-                    onChange={(e) => setSelectedDay(e.target.value === "all" ? "all" : parseInt(e.target.value))}
-                    className="bg-white border border-slate-200 text-slate-700 font-semibold text-sm rounded-xl px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 shadow-sm"
-                  >
-                    <option value="all">전체 동선</option>
-                    {activePlan.days.map((d: any) => (
-                      <option key={d.day} value={d.day}>Day {d.day}</option>
-                    ))}
-                  </select>
+                <div className="flex items-center gap-2 flex-wrap">
+
+                  {/* 국내 여행일 때만 카카오/구글 전환 버튼 표시 */}
+                  {isDomestic && (
+                    <div className="flex p-1 bg-slate-100 rounded-xl border border-slate-200">
+                      <button
+                        onClick={() => setMapType("kakao")}
+                        className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-all ${
+                          mapType === "kakao"
+                            ? "bg-yellow-400 text-yellow-900 shadow-sm"
+                            : "text-slate-500 hover:text-slate-800"
+                        }`}
+                      >
+                        🗺️ 카카오
+                      </button>
+                      <button
+                        onClick={() => setMapType("google")}
+                        className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-all ${
+                          mapType === "google"
+                            ? "bg-white text-blue-700 shadow-sm border border-slate-200"
+                            : "text-slate-500 hover:text-slate-800"
+                        }`}
+                      >
+                        🌍 구글
+                      </button>
+                    </div>
+                  )}
+
+                  {/* Day 필터 셀렉트 */}
+                  <div className="flex items-center gap-1.5">
+                    <MapPin className="w-4 h-4 text-slate-400" />
+                    <select
+                      value={selectedDay === "all" ? "all" : selectedDay}
+                      onChange={(e) => setSelectedDay(e.target.value === "all" ? "all" : parseInt(e.target.value))}
+                      className="bg-white border border-slate-200 text-slate-700 font-semibold text-sm rounded-xl px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 shadow-sm"
+                    >
+                      <option value="all">전체 동선</option>
+                      {activePlan.days.map((d: any) => (
+                        <option key={d.day} value={d.day}>Day {d.day}</option>
+                      ))}
+                    </select>
+                  </div>
                 </div>
               </div>
+
+              {/* 지도 패널: mapType에 따라 카카오 또는 구글 표시 */}
               <div className="w-full h-[600px]">
-                <MapPanel markers={markers} path={path} googleKey={GOOGLE_KEY} />
+                {mapType === "kakao" && isDomestic
+                  ? <KakaoMapPanel markers={markers} path={path} kakaoKey={KAKAO_KEY} />
+                  : <MapPanel      markers={markers} path={path} googleKey={GOOGLE_KEY} />
+                }
               </div>
               <p className="text-center text-xs text-slate-400 mt-2 font-medium">
                 마커를 클릭하면 장소 이름을 확인할 수 있습니다.
