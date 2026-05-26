@@ -1,12 +1,6 @@
 # services/distance_service.py
 """
 거리 계산 및 이동시간 서비스
-
-[최적화 방침]
-- 일정 생성 중 외부 API를 수백 번 호출하면 2분+ 소요 문제 발생.
-- 후보 선택(bulk) 단계에서는 Haversine 직선거리 추정으로 즉시 처리.
-- 최종 표시용(single) 단계에서는 캐시 우선 → 미스 시 Haversine.
-- 결과: 외부 API 호출 수백 번 → 거의 0회, 생성 시간 수초 내로 단축.
 """
 
 import math
@@ -25,25 +19,21 @@ import backend_postgres as backend  # DB부: backend_postgres 사용 (PostGIS �
 class DistanceService:
     """거리 계산 및 이동시간 조회 담당"""
     
-    # 도로계수: 직선거리 × 이 값 = 실제 이동거리 근사치
-    # (도심 1.3, 산간/지방 1.5 — 보수적으로 1.3 사용)
-    ROAD_FACTOR = 1.3
-
     @staticmethod
     def haversine_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
         """
-        Haversine 공식을 사용한 두 좌표 간 직선거리 계산 (km)
+        Haversine 공식을 사용한 두 좌표 간 거리 계산 (km)
         
         Args:
             lat1, lon1: 출발지 좌표
             lat2, lon2: 도착지 좌표
             
         Returns:
-            거리 (km). 좌표가 유효하지 않으면 99999 반환.
+            거리 (km)
         """
         try:
             lat1, lon1, lat2, lon2 = map(float, [lat1, lon1, lat2, lon2])
-        except Exception:
+        except (ValueError, TypeError):
             return 99999
         
         # 0.0 좌표는 유효하지 않다고 간주
@@ -57,82 +47,76 @@ class DistanceService:
         a = math.sin(dLat/2) * math.sin(dLat/2) + math.cos(math.radians(lat1)) \
             * math.cos(math.radians(lat2)) * math.sin(dLon/2) * math.sin(dLon/2)
         c = 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
+        distance = R * c
         
-        return R * c
-
+        return distance
+    
     @staticmethod
-    def _haversine_seconds(lat1: float, lng1: float, lat2: float, lng2: float,
-                           mode: str = 'driving') -> int:
-        """
-        직선거리 기반 이동시간 추정 (초 단위, 외부 API 호출 없음)
-        
-        - driving: 평균 30 km/h (도심 교통 감안)
-        - transit/walking: 평균 4 km/h
-        - 최소값: 5분(300초)
-        """
-        dist_km = DistanceService.haversine_distance(lat1, lng1, lat2, lng2)
-        if dist_km >= 99999:
-            return 999999
-        speed_kmh = 30 if mode == 'driving' else 4
-        return max(300, int(dist_km * DistanceService.ROAD_FACTOR / speed_kmh * 3600))
-
-    @staticmethod
-    def get_travel_time(origin_lat: float, origin_lng: float,
-                        dest_lat: float, dest_lng: float,
-                        is_korea: bool, mode: str = 'driving') -> int:
+    def get_travel_time(origin_lat: float, origin_lng: float, 
+                       dest_lat: float, dest_lng: float,
+                       is_korea: bool, mode: str = 'driving') -> int:
         """
         두 지점 간 이동시간 조회 (초 단위)
-
-        [전략]
-        1. DB 캐시에 저장된 실제 측정값이 있으면 즉시 반환 (API 호출 없음).
-        2. 캐시 미스 시 Haversine 직선거리로 추정값 반환 (API 호출 없음).
-           → 일정 생성 속도를 수초 내로 유지하기 위한 결정.
-
+        
         Args:
             origin_lat, origin_lng: 출발지 좌표
             dest_lat, dest_lng: 도착지 좌표
-            is_korea: 국내 여행 여부 (현재는 동일 로직, 향후 분기 가능)
+            is_korea: 국내 여행 여부
             mode: 이동 수단 ('driving' 또는 'transit')
-
+            
         Returns:
             이동시간 (초)
         """
-        # 1단계: DB 캐시 확인
-        try:
-            cached = backend.get_movement_cache(origin_lat, origin_lng, dest_lat, dest_lng, mode)
-            if cached is not None:
-                return cached
-        except Exception:
-            pass
-
-        # 2단계: 캐시 미스 → Haversine 추정 (즉시, 외부 API 호출 없음)
-        return DistanceService._haversine_seconds(origin_lat, origin_lng, dest_lat, dest_lng, mode)
-
+        if is_korea:
+            return backend.get_real_duration_kakao(
+                origin_lat, origin_lng, dest_lat, dest_lng, mode=mode
+            )
+        else:
+            results = backend.get_real_duration_google_bulk(
+                origin_lat, origin_lng, 
+                [{'lat': dest_lat, 'lng': dest_lng}], 
+                mode=mode
+            )
+            return results[0][0] if results else 999999
+    
     @staticmethod
     def get_travel_times_bulk(origin_lat: float, origin_lng: float,
-                              destinations: list, is_korea: bool,
+                              destinations: list, is_korea: bool, 
                               mode: str = 'driving') -> list:
         """
-        한 출발지에서 여러 후보 목적지까지의 이동시간을 일괄 추정.
-
-        [전략] 후보 선택(최적화) 단계용 함수이므로 정확도보다 속도가 중요.
-        → 외부 API 호출 없이 Haversine 직선거리로 즉시 추정.
-        → API를 수백 번 호출하던 구조를 완전히 제거하여 생성 시간 단축.
-
+        한 출발지에서 여러 목적지까지의 이동시간을 일괄 조회
+        
         Args:
             origin_lat, origin_lng: 출발지 좌표
-            destinations: 목적지 리스트 (각 항목: {'lat': float, 'lng': float, ...})
-            is_korea: 국내 여행 여부 (현재 로직 동일, 향후 분기 가능)
+            destinations: 목적지 리스트 (각 항목은 {'lat': float, 'lng': float} 형태)
+            is_korea: 국내 여행 여부
             mode: 이동 수단
-
+            
         Returns:
-            [(이동시간_초, 목적지_dict), ...] 리스트 (원래 순서 유지)
+            [(이동시간, 목적지), ...] 리스트
         """
-        results = []
-        for dest in destinations:
-            est = DistanceService._haversine_seconds(
-                origin_lat, origin_lng, dest.get('lat', 0.0), dest.get('lng', 0.0), mode
+        if is_korea:
+            # Kakao API는 개별 호출 필요
+            import concurrent.futures
+            results = []
+            
+            def get_time(dest):
+                return backend.get_real_duration_kakao(
+                    origin_lat, origin_lng, dest['lat'], dest['lng'], mode=mode
+                )
+            
+            with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+                future_map = {executor.submit(get_time, d): d for d in destinations}
+                for future in concurrent.futures.as_completed(future_map):
+                    dest = future_map[future]
+                    try:
+                        results.append((future.result(), dest))
+                    except Exception:
+                        results.append((999999, dest))
+            
+            return results
+        else:
+            # Google API는 일괄 조회 가능
+            return backend.get_real_duration_google_bulk(
+                origin_lat, origin_lng, destinations, mode=mode
             )
-            results.append((est, dest))
-        return results
-

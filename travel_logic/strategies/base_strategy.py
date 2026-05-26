@@ -53,30 +53,41 @@ class ItineraryStrategy(ABC):
     ) -> Dict[str, int]:
         """
         사용자 선호도에 따라 장소 분배 조정
-        
-        Args:
-            distribution: 기본 장소 분배
-            user_data: 사용자 입력 데이터
-            
-        Returns:
-            조정된 장소 분배
+
+        - style: 사용자가 선택한 스타일에 맞게 각 테마 내 비중 보정 (±1)
+        - pace/아이동반: 기존 로직 유지
         """
-        # 일정 강도에 따른 조절
+        styles = set(user_data.get('style', []))
+
+        # ── style 기반 보정 (테마의 기본 성격을 유지하면서 사용자 취향 반영) ──
+        # 맛집/휴양 선호 → 모든 테마에서 음식 슬롯 최소 1개 이상 확보
+        if styles & {'맛집', '휴양', '카페투어'}:
+            distribution['foods'] = max(distribution['foods'], 1)
+            if '카페투어' in styles:
+                distribution['cafes'] = max(distribution['cafes'], 1)
+        # 자연/관광/문화 선호 → 관광 슬롯 최소 1개 이상 확보
+        if styles & {'자연', '관광', '문화', '역사/문화'}:
+            distribution['sights'] = max(distribution['sights'], 1)
+        # 액티비티/쇼핑 선호 → 관광 슬롯 소폭 상향
+        if styles & {'액티비티', '쇼핑'}:
+            distribution['sights'] = min(4, distribution['sights'] + 1)
+
+        # ── 일정 강도에 따른 조절 (기존 로직) ─────────────────────────────
         pace = user_data.get('pace', '보통')
-        if pace == '여유' or '휴양' in user_data.get('style', []):
+        if pace == '여유' or '휴양' in styles:
             distribution['sights'] = max(1, distribution['sights'] - 1)
-            distribution['foods'] = max(1, distribution['foods'] - 1)
-            distribution['cafes'] = 1
+            distribution['foods']  = max(1, distribution['foods'] - 1)
+            distribution['cafes']  = 1
         elif pace == '빡빡':
             distribution['sights'] = min(4, distribution['sights'] + 1)
-            distribution['foods'] = min(3, distribution['foods'] + 1)
-            distribution['cafes'] = 1
+            distribution['foods']  = min(3, distribution['foods'] + 1)
+            distribution['cafes']  = 1
         
-        # 동행인에 따른 조절
+        # ── 동행인에 따른 조절 (기존 로직) ────────────────────────────────
         if user_data.get('with_kids'):
             distribution['sights'] = max(1, distribution['sights'] - 1)
-            distribution['foods'] = max(1, distribution['foods'])
-            distribution['cafes'] = 1
+            distribution['foods']  = max(1, distribution['foods'])
+            distribution['cafes']  = 1
         
         if '커플' in user_data.get('companions', []):
             distribution['cafes'] = max(1, distribution['cafes'])
