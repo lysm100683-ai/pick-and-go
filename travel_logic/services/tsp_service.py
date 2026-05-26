@@ -71,17 +71,20 @@ class TSPService:
         is_korea: bool,
         travel_mode: str,
         end_point: Optional[Dict[str, Any]] = None,   # ③ Round-trip 복귀지
+        haversine_only: bool = False,                  # ④ True면 실제 API 호출 없이 Haversine만 사용
     ) -> Tuple[List[Dict[str, Any]], List[int], int]:
         """
         Nearest Neighbor + 2-Opt 알고리즘으로 하루 방문 순서를 최적화한다.
 
         Args:
-            places:      하루 방문할 관광지 리스트
-            start_point: 출발지(숙소/공항). None이면 Haversine Greedy 폴백.
-            is_korea:    국내 여행 여부 (True → KakaoAPI, False → GoogleAPI)
-            travel_mode: 'driving' | 'transit'
-            end_point:   하루 종료 후 복귀할 숙소. None이면 Round-trip 미고려.
-                         2-Opt 시 마지막 장소 → end_point 이동거리를 비용에 포함.
+            places:         하루 방문할 관광지 리스트
+            start_point:    출발지(숙소/공항). None이면 Haversine Greedy 폴백.
+            is_korea:       국내 여행 여부 (True → KakaoAPI, False → GoogleAPI)
+            travel_mode:    'driving' | 'transit'
+            end_point:      하루 종료 후 복귀할 숙소. None이면 Round-trip 미고려.
+                            2-Opt 시 마지막 장소 → end_point 이동거리를 비용에 포함.
+            haversine_only: True면 실제 API 호출 없이 Haversine 직선거리로만 NN 수행.
+                            Phase 3 pre-run처럼 대소 판별만 필요할 때 사용 (API 비용 절감).
 
         Returns:
             ordered_places: 최적 방문 순서로 정렬된 장소 리스트
@@ -120,13 +123,17 @@ class TSPService:
             )
             top_candidates = candidates_sorted[:top_n]
 
-            # bulk 실제 이동시간 조회 (캐시 → API)
-            results = self.distance_service.get_travel_times_bulk(
-                current.get('lat', 0.0), current.get('lng', 0.0),
-                top_candidates, is_korea, travel_mode,
-            )
-            results.sort(key=lambda x: x[0])
-            _, best_place = results[0]
+            if haversine_only:
+                # Haversine 최단 거리 장소를 바로 선택 (API 호출 없음)
+                best_place = top_candidates[0]
+            else:
+                # bulk 실제 이동시간 조회 (캐시 → API)
+                results = self.distance_service.get_travel_times_bulk(
+                    current.get('lat', 0.0), current.get('lng', 0.0),
+                    top_candidates, is_korea, travel_mode,
+                )
+                results.sort(key=lambda x: x[0])
+                _, best_place = results[0]
 
             ordered.append(best_place)
             unvisited.remove(best_place)

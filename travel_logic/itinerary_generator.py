@@ -128,12 +128,10 @@ class ItineraryGenerator:
         _local_transport = str(user_data.get('local_transport', '자차') or '자차')
         _travel_mode_pre = 'driving' if _local_transport in ('렌트카', '자차') else 'transit'
 
-        # base_hotel: Phase 4 앵커링의 기준점 (공항 출발이면 공항, 아니면 첫 번째 호텔)
-        base_hotel: Optional[Dict[str, Any]] = (
-            airport_place
-            if ('항공' in user_data.get('transport', []) and airport_place)
-            else (hotels[0] if hotels else None)
-        )
+        # base_hotel: Phase 4 앵커링의 기준점 — 실제 숙소를 사용해야 함
+        # ※ 공항은 출발/도착 지점이지 숙소가 아님. 비행 여행이라도 hotels[0]을 base로 사용.
+        #   (이전 버그: airport_place를 base_hotel로 사용 → 모든 박이 공항으로 지정되는 문제)
+        base_hotel: Optional[Dict[str, Any]] = hotels[0] if hotels else airport_place
 
         daily_travel_times_p3: List[List[int]] = []
         last_places_per_day: List[Optional[Dict[str, Any]]] = []
@@ -156,6 +154,7 @@ class ItineraryGenerator:
                     end_point=_day_start,
                     is_korea=is_korea,
                     travel_mode=_travel_mode_pre,
+                    haversine_only=True,   # Phase 3 pre-run: 이동시간 대소 판별만 필요 → Haversine 근사로 충분
                 )
                 daily_travel_times_p3.append(list(_times))
                 last_places_per_day.append(_ordered[-1] if _ordered else None)
@@ -400,11 +399,11 @@ class ItineraryGenerator:
             night_stay_hotels = [_fallback_hotel] * max(0, duration - 1)
 
         # last_night_hotel: 현재 날짜의 출발 숙소 (루프 내에서 갱신됨)
-        # 1일차 시작: 공항 출발이면 공항, 아니면 Phase 4가 결정한 첫 번째 박 숙소 (또는 첫 호텔)
+        # 1일차 시작: Phase 4가 결정한 첫 번째 박 숙소 (공항은 숙소가 아니므로 hotels 우선)
+        # ※ 1일차 "도착 지점" 표시는 아래 d==1 블록에서 airport_place로 별도 처리됨
         last_night_hotel: Optional[Dict[str, Any]] = (
-            airport_place
-            if ('항공' in user_data.get('transport', []) and airport_place)
-            else (night_stay_hotels[0] if night_stay_hotels else (all_hotels[0] if all_hotels else None))
+            night_stay_hotels[0] if night_stay_hotels and night_stay_hotels[0]
+            else (all_hotels[0] if all_hotels else None)
         )
         
         # 일차별 일정 생성

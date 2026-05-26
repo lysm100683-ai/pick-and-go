@@ -19,6 +19,28 @@ import re
 # 로거 설정
 logger = logging.getLogger(__name__)
 
+# ─── 성능 최적화: googlemaps 클라이언트 싱글톤 ───────────────────────
+# 매 호출마다 Client()를 새로 생성하면 "queries_quota" 로그가 반복되고
+# 초기화 오버헤드가 쌓여 100초+ 지연의 원인이 됨 → 모듈 로드 시 1회만 생성
+_gmaps_client_instance: object | None = None
+
+def _get_gmaps_client():
+    """googlemaps.Client 싱글톤 반환. API 키 미설정 시 None 반환."""
+    global _gmaps_client_instance
+    if _gmaps_client_instance is None:
+        if Config.GMAPS_API_KEY and Config.GMAPS_API_KEY != 'YOUR_GOOGLE_MAPS_API_KEY':
+            try:
+                _gmaps_client_instance = googlemaps.Client(key=Config.GMAPS_API_KEY)
+            except Exception as e:
+                logger.warning(f"[GmapsClient] 초기화 실패: {e}")
+    return _gmaps_client_instance
+
+
+# ─── 성능 최적화: 주소 번역 결과 캐시 ───────────────────────────────
+# translate_address()가 _make_place()에서 장소마다 호출되므로
+# 동일 주소 반복 번역 방지를 위해 간단한 in-memory 캐시 적용
+_addr_translation_cache: dict = {}
+
 
 # ---------------------------------------------------------------------------
 # 1. 영업 상태 확인
@@ -96,13 +118,19 @@ def translate_address(address: str) -> str:
     if re.search(r'[\uAC00-\uD7A3]', address):
         return address
 
-    # 1순위: Google Geocoding API로 한국어 주소 획득
-    if Config.GMAPS_API_KEY and Config.GMAPS_API_KEY != 'YOUR_GOOGLE_MAPS_API_KEY':
+    # 캐시 확인 (동일 영문 주소 반복 번역 방지)
+    if address in _addr_translation_cache:
+        return _addr_translation_cache[address]
+
+    # 1순위: Google Geocoding API로 한국어 주소 획득 (싱글톤 클라이언트 재사용)
+    gmaps = _get_gmaps_client()
+    if gmaps:
         try:
-            gmaps = googlemaps.Client(key=Config.GMAPS_API_KEY)
             results = gmaps.geocode(address, language='ko')
             if results:
-                return results[0].get('formatted_address', address)
+                translated = results[0].get('formatted_address', address)
+                _addr_translation_cache[address] = translated
+                return translated
         except Exception as e:
             logger.debug(f"Geocoding 주소 변환 실패 ({address[:30]}): {e}")
 
@@ -110,7 +138,9 @@ def translate_address(address: str) -> str:
     try:
         from deep_translator import GoogleTranslator
         translated = GoogleTranslator(source='auto', target='ko').translate(address)
-        return translated if translated else address
+        result = translated if translated else address
+        _addr_translation_cache[address] = result
+        return result
     except Exception as e:
         logger.debug(f"번역 실패 ({address[:30]}): {e} — 원본 반환")
         return address
@@ -457,8 +487,11 @@ def get_real_duration_google_bulk(lat1, lng1, candidates, mode='driving'):
     if not Config.GMAPS_API_KEY or Config.GMAPS_API_KEY == "YOUR_GOOGLE_MAPS_API_KEY":
         logger.warning("Google Maps API 키가 설정되지 않아 기본값(30분) 반환")
         return [(30*60, p) for p in candidates]
-    
-    gmaps = googlemaps.Client(key=Config.GMAPS_API_KEY)
+
+    # 싱글톤 클라이언트 사용 (매 호출마다 새 Client 생성 방지)
+    gmaps = _get_gmaps_client()
+    if gmaps is None:
+        return [(30*60, p) for p in candidates]
     results = []
     
     for p in candidates:
@@ -629,7 +662,10 @@ def fetch_google(city: str, keywords: list, is_domestic: bool = False) -> dict:
         "zoo":                 "테마파크",
     }
 
-    gmaps_client = googlemaps.Client(key=Config.GMAPS_API_KEY)
+    # 싱글톤 클라이언트 사용 (데이터 수집도 동일 인스턴스 재사용)
+    gmaps_client = _get_gmaps_client()
+    if gmaps_client is None:
+        return {"added_count": 0, "updated_count": 0, "error": "API client not initialized"}
     added_count = 0
     updated_count = 0
 
