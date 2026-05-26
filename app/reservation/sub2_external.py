@@ -10,8 +10,9 @@ Sub 2 — 외부 예약 연동 관리부
   6. 모두 성공 → 예약 결과 리스트 반환
 
 환경변수:
-  MOCK_FLIGHT=true  → Mock 항공 예약 사용 (기본값)
-  MOCK_HOTEL=true   → Mock 숙소 예약 사용 (기본값)
+  MOCK_FLIGHT=true       → Mock 항공 예약 사용 (기본값 / false 시 Duffel 실 API)
+  MOCK_HOTEL=true        → Mock 숙소 예약 사용 (기본값)
+  DUFFEL_API_KEY=...     → Duffel 발급 API 토큰 (MOCK_FLIGHT=false 시 필수)
 """
 import asyncio
 import os
@@ -26,6 +27,9 @@ MOCK_HOTEL  = os.getenv("MOCK_HOTEL",  "true").lower() == "true"
 # Mock 성공률 (테스트용 — 환경변수로 조정 가능)
 MOCK_FLIGHT_SUCCESS_RATE = float(os.getenv("MOCK_FLIGHT_SUCCESS_RATE", "0.95"))
 MOCK_HOTEL_SUCCESS_RATE  = float(os.getenv("MOCK_HOTEL_SUCCESS_RATE",  "0.95"))
+
+# 파트너사 API 응답 대기 타임아웃 (초) — 초과 시 실패로 처리 후 Saga 롤백 발동
+BOOKING_TIMEOUT_SEC = float(os.getenv("BOOKING_TIMEOUT_SEC", "10.0"))
 
 
 class BookingFailedError(Exception):
@@ -117,14 +121,58 @@ async def _mock_book_hotel(context: dict) -> dict:
         }
 
 
+async def _with_timeout(coro, item_type: str) -> dict:
+    """
+    개별 예약 코루틴에 타임아웃 적용 (SRS M-14: 파트너사 응답 10초 초과 시 실패 처리).
+    asyncio.TimeoutError 발생 시 실패 딕셔너리를 반환하여 Saga 롤백 흐름으로 진입.
+    """
+    try:
+        return await asyncio.wait_for(coro, timeout=BOOKING_TIMEOUT_SEC)
+    except asyncio.TimeoutError:
+        return {
+            "item_type":          item_type,
+            "partner_name":       "timeout",
+            "partner_booking_id": None,
+            "status":             "failed",
+            "amount":             0,
+            "currency":           "KRW",
+            "details":            {},
+            "error_msg": (
+                f"파트너사 응답 없음 — {BOOKING_TIMEOUT_SEC:.0f}초 초과 (TimeoutError)"
+            ),
+        }
+
+
 async def _cancel_item(item: dict) -> None:
     """
-    예약 취소 API 호출 (롤백용)
-    실제 연동 시 파트너사 취소 API 호출로 교체
+    예약 취소 API 호출 (롤백용 — Saga 보상 트랜잭션).
+    MOCK_FLIGHT=false 이고 item_type == 'flight' 이면 Duffel 실 취소 API 호출.
+    그 외(Mock, 숙소)는 시뮬레이션.
     """
-    if item.get("partner_booking_id"):
-        await asyncio.sleep(0.1)  # 취소 API 시뮬레이션
-        print(f"[Sub2] 🔄 롤백: {item['item_type']} {item['partner_booking_id']} 취소 처리")
+    booking_id = item.get("partner_booking_id")
+    if not booking_id:
+        return
+
+    item_type = item.get("item_type", "unknown")
+
+    # Duffel 실 항공 취소
+    if item_type == "flight" and not MOCK_FLIGHT:
+        try:
+            await asyncio.to_thread(_duffel_cancel_order, booking_id)
+            print(f"[Sub2] 롤백(Duffel): flight {booking_id} 취소 완료")
+        except Exception as e:
+            print(f"[Sub2] 롤백 경고: flight {booking_id} 취소 실패 — {e}")
+    # LiteAPI 실 숙소 취소
+    elif item_type == "hotel" and not MOCK_HOTEL:
+        try:
+            await asyncio.to_thread(_liteapi_cancel_hotel, booking_id)
+            print(f"[Sub2] 롤백(LiteAPI): hotel {booking_id} 취소 완료")
+        except Exception as e:
+            print(f"[Sub2] 롤백 경고: hotel {booking_id} 취소 실패 — {e}")
+    else:
+        # Mock 취소 시뮬레이션
+        await asyncio.sleep(0.1)
+        print(f"[Sub2] 롤백(Mock): {item_type} {booking_id} 취소 처리")
 
 
 # ── 메인 함수 ──────────────────────────────────────────────────────
@@ -144,11 +192,15 @@ async def book_parallel(validated_context: dict) -> List[dict]:
     print(f"[Sub2] 🚀 병렬 예약 시작 — {validated_context['dep_city']} → "
           f"{validated_context['dest_city']}, {validated_context['people']}명")
 
-    # 1. 병렬 예약 시도
+    # 1. 병렬 예약 시도 (각 항목에 개별 타임아웃 적용)
     flight_coro = _mock_book_flight(validated_context) if MOCK_FLIGHT else _real_book_flight(validated_context)
     hotel_coro  = _mock_book_hotel(validated_context)  if MOCK_HOTEL  else _real_book_hotel(validated_context)
 
-    results: list = await asyncio.gather(flight_coro, hotel_coro, return_exceptions=True)
+    results: list = await asyncio.gather(
+        _with_timeout(flight_coro, "flight"),
+        _with_timeout(hotel_coro,  "hotel"),
+        return_exceptions=True,
+    )
 
     # 2. 예외 처리 (네트워크 오류 등)
     booking_results = []
@@ -192,19 +244,363 @@ async def book_parallel(validated_context: dict) -> List[dict]:
     return booking_results
 
 
-# ── 실제 API 연동 스텁 (Phase 2용) ────────────────────────────────
+async def rollback_bookings(booking_results: List[dict]) -> None:
+    """
+    Saga 보상 트랜잭션: 이미 확정된 외부 예약을 일괄 취소.
+    Sub3 또는 Sub4 실패 시 main.py에서 호출됨.
+    """
+    confirmed = [
+        r for r in booking_results
+        if r.get("status") == "confirmed" and r.get("partner_booking_id")
+    ]
+    if not confirmed:
+        return
+
+    print(f"[Sub2] ⚠️ Saga 보상 트랜잭션 발동 → "
+          f"{[r['item_type'] for r in confirmed]} 취소 시작")
+    rollback_tasks = [_cancel_item(item) for item in confirmed]
+    await asyncio.gather(*rollback_tasks, return_exceptions=True)
+    print(f"[Sub2] 롤백 완료 — {len(confirmed)}건 취소 처리")
+
+
+# ── Duffel 실 API 연동 (동기 함수 — asyncio.to_thread로 호출) ──────
+# SDK(duffel-api 0.6.x)가 구버전 API를 사용하므로 requests로 직접 호출
+
+import requests as _requests
+
+DUFFEL_API_BASE = "https://api.duffel.com"
+DUFFEL_VERSION  = "v2"
+
+
+def _duffel_headers() -> dict:
+    """Duffel API 공통 헤더. DUFFEL_API_KEY 없으면 즉시 오류."""
+    api_key = os.getenv("DUFFEL_API_KEY")
+    if not api_key:
+        raise EnvironmentError("DUFFEL_API_KEY 환경변수가 설정되지 않았습니다.")
+    return {
+        "Authorization":  f"Bearer {api_key}",
+        "Duffel-Version": DUFFEL_VERSION,
+        "Content-Type":   "application/json",
+        "Accept":         "application/json",
+    }
+
+
+def _duffel_post(path: str, body: dict) -> dict:
+    """Duffel POST 요청 공통 처리."""
+    r = _requests.post(
+        f"{DUFFEL_API_BASE}{path}",
+        headers=_duffel_headers(),
+        json={"data": body},
+        timeout=30,
+    )
+    r.raise_for_status()
+    return r.json()["data"]
+
+
+def _duffel_get(path: str, params: dict = None) -> dict:
+    """Duffel GET 요청 공통 처리."""
+    r = _requests.get(
+        f"{DUFFEL_API_BASE}{path}",
+        headers=_duffel_headers(),
+        params=params,
+        timeout=30,
+    )
+    r.raise_for_status()
+    return r.json()
+
+
+def _duffel_book_flight_sync(context: dict) -> dict:
+    """
+    Duffel API v2로 항공권을 실제 예약하는 동기 함수.
+    흐름:
+      1. 항공편 검색  — 출발지·목적지·날짜·인원 전송
+      2. 최저가 선택  — 검색 결과 중 total_amount 최소 항공편
+      3. 예약 확정    — Duffel balance로 테스트 결제 후 order_id 발급
+      4. 결과 반환    — 내부 포맷(partner_booking_id = order_id)으로 변환
+    """
+    dep    = context.get("dep_city",  "ICN")
+    dest   = context.get("dest_city", "NRT")
+    start  = str(context.get("start_date", ""))
+    people = int(context.get("people", 1))
+
+    # ── 1단계: 항공편 검색 ───────────────────────────────────────────
+    offer_req = _duffel_post("/air/offer_requests", {
+        "slices": [{"origin": dep, "destination": dest, "departure_date": start}],
+        "passengers": [{"type": "adult"} for _ in range(people)],
+        "cabin_class": "economy",
+    })
+
+    offers = offer_req.get("offers", [])
+    if not offers:
+        return {
+            "item_type": "flight", "partner_name": "duffel",
+            "partner_booking_id": None, "status": "failed",
+            "amount": 0, "currency": "KRW", "details": {},
+            "error_msg": f"{dep}→{dest} 구간 검색 결과 없음",
+        }
+
+    # ── 2단계: 최저가 항공편 선택 ────────────────────────────────────
+    best = min(offers, key=lambda o: float(o["total_amount"]))
+
+    # ── 3단계: 예약 확정 ─────────────────────────────────────────────
+    # offer 내 passenger id와 탑승자 정보를 매핑해야 함
+    order_passengers = [
+        {
+            "id":           pax["id"],
+            "title":        "mr",
+            "gender":       "m",
+            "given_name":   "Test",
+            "family_name":  "Passenger",
+            "born_on":      "1990-01-01",
+            "email":        "test@pickandgo.kr",
+            "phone_number": "+821012345678",
+        }
+        for pax in best["passengers"]
+    ]
+
+    order = _duffel_post("/air/orders", {
+        "selected_offers": [best["id"]],
+        "passengers":      order_passengers,
+        "payments": [{
+            "type":     "balance",          # Duffel 잔액으로 테스트 결제
+            "currency": best["total_currency"],
+            "amount":   best["total_amount"],
+        }],
+        "type": "instant",
+    })
+
+    # ── 4단계: 내부 포맷으로 변환 후 반환 ────────────────────────────
+    slices   = order.get("slices", [])
+    segments = slices[0].get("segments", []) if slices else []
+    seg      = segments[0] if segments else {}
+    flight_no = (
+        seg.get("marketing_carrier", {}).get("iata_code", "") +
+        seg.get("marketing_carrier_flight_number", "")
+    ) or "N/A"
+
+    return {
+        "item_type":          "flight",
+        "partner_name":       "duffel",
+        "partner_booking_id": order["id"],      # Duffel order ID — 취소 시 사용
+        "status":             "confirmed",
+        "amount":             int(float(order["total_amount"])),
+        "currency":           order["total_currency"],
+        "details": {
+            "flight_no":       flight_no,
+            "dep":             dep,
+            "arr":             dest,
+            "departure_date":  start,
+            "seats":           people,
+            "class":           "Economy",
+            "duffel_offer_id": best["id"],
+        },
+        "error_msg": None,
+    }
+
+
+def _duffel_cancel_order(order_id: str) -> None:
+    """
+    Duffel API v2로 항공 예약을 취소하는 동기 함수 (Saga 롤백용).
+    흐름:
+      1. 취소 요청 생성 → cancellation_id 발급
+      2. 취소 확정      → 이 시점에 실제 예약 취소 처리
+    """
+    # 1단계: 취소 요청 생성
+    cancel = _duffel_post("/air/order_cancellations", {"order_id": order_id})
+    cancel_id = cancel["id"]
+
+    # 2단계: 취소 확정
+    _requests.post(
+        f"{DUFFEL_API_BASE}/air/order_cancellations/{cancel_id}/actions/confirm",
+        headers=_duffel_headers(),
+        timeout=30,
+    ).raise_for_status()
+
 
 async def _real_book_flight(context: dict) -> dict:
     """
-    실제 Amadeus API 연동 (Phase 2)
-    환경변수 MOCK_FLIGHT=false 설정 시 활성화
+    Duffel 실 API 항공 예약 (비동기 래퍼).
+    Duffel SDK는 동기 방식이므로 asyncio.to_thread로 별도 스레드에서 실행.
+    환경변수 MOCK_FLIGHT=false 설정 시 book_parallel()에서 호출됨.
     """
-    raise NotImplementedError("Amadeus API 연동은 Phase 2에서 구현 예정입니다.")
+    try:
+        return await asyncio.to_thread(_duffel_book_flight_sync, context)
+    except Exception as e:
+        return {
+            "item_type": "flight",
+            "partner_name": "duffel",
+            "partner_booking_id": None,
+            "status": "failed",
+            "amount": 0,
+            "currency": "KRW",
+            "details": {},
+            "error_msg": f"Duffel API 오류: {e}",
+        }
+
+
+# ── LiteAPI 숙소 연동 (동기 함수 — asyncio.to_thread로 호출) ──────
+# Duffel Stays 별도 계약 필요 → LiteAPI Sandbox로 대체
+# auth: X-API-Key 헤더 (Bearer 아님)
+
+LITEAPI_BASE    = "https://api.liteapi.travel/v3.0"
+LITEAPI_TIMEOUT = 30
+
+
+def _liteapi_headers() -> dict:
+    """LiteAPI 공통 헤더. LITEAPI_KEY 없으면 즉시 오류."""
+    api_key = os.getenv("LITEAPI_KEY")
+    if not api_key:
+        raise EnvironmentError("LITEAPI_KEY 환경변수가 설정되지 않았습니다.")
+    return {
+        "X-API-Key":    api_key,
+        "Content-Type": "application/json",
+        "Accept":       "application/json",
+    }
+
+
+def _liteapi_post(path: str, body: dict) -> dict:
+    """LiteAPI POST 요청 공통 처리."""
+    r = _requests.post(
+        f"{LITEAPI_BASE}{path}",
+        headers=_liteapi_headers(),
+        json=body,
+        timeout=LITEAPI_TIMEOUT,
+    )
+    r.raise_for_status()
+    return r.json()
+
+
+def _liteapi_book_hotel_sync(context: dict) -> dict:
+    """
+    LiteAPI Sandbox로 숙소를 실제 예약하는 동기 함수.
+    흐름:
+      1. 호텔 요금 검색  — 목적지 IATA 공항코드 기반, 최저가 선택
+      2. Prebook        — offerId → prebookId 발급 (가격·가용성 재확인)
+      3. 예약 확정       — prebookId + 투숙객 정보 → bookingId 발급
+      4. 결과 반환       — 내부 포맷으로 변환
+    결제: ACC_CREDIT_CARD (Sandbox — 실제 청구 없음)
+    """
+    dest     = context.get("dest_city", "NRT")
+    start    = str(context.get("start_date", ""))
+    end      = str(context.get("end_date", ""))
+    people   = int(context.get("people", 1))
+    duration = int(context.get("duration", 1))
+
+    # ── 1단계: 호텔 요금 검색 ────────────────────────────────────
+    search_resp = _liteapi_post("/hotels/rates?rm=true", {
+        "iataCode":         dest,
+        "checkin":          start,
+        "checkout":         end,
+        "occupancies":      [{"adults": people}],
+        "guestNationality": "KR",
+        "currency":         "USD",
+        "maxRatesPerHotel": 1,
+    })
+
+    hotels = search_resp.get("data", [])
+    if not hotels:
+        return {
+            "item_type": "hotel", "partner_name": "liteapi",
+            "partner_booking_id": None, "status": "failed",
+            "amount": 0, "currency": "USD", "details": {},
+            "error_msg": f"{dest} 지역 숙소 검색 결과 없음",
+        }
+
+    # 첫 번째 호텔의 첫 번째 객실 선택
+    best_hotel = hotels[0]
+    room_types = best_hotel.get("roomTypes", [])
+    if not room_types:
+        return {
+            "item_type": "hotel", "partner_name": "liteapi",
+            "partner_booking_id": None, "status": "failed",
+            "amount": 0, "currency": "USD", "details": {},
+            "error_msg": "이용 가능한 객실 없음",
+        }
+
+    rt        = room_types[0]
+    offer_id  = rt["offerId"]
+    rates     = rt.get("rates", [])
+    amount    = (
+        rates[0].get("retailRate", {}).get("total", [{}])[0].get("amount", 0)
+        if rates else 0
+    )
+
+    # ── 2단계: Prebook ───────────────────────────────────────────
+    pb_resp    = _liteapi_post("/rates/prebook", {
+        "offerId":       offer_id,
+        "usePaymentSdk": False,
+    })
+    prebook_id = pb_resp["data"]["prebookId"]
+
+    # ── 3단계: 예약 확정 ──────────────────────────────────────────
+    book_resp = _liteapi_post("/rates/book", {
+        "prebookId": prebook_id,
+        "holder": {
+            "firstName": "Test",
+            "lastName":  "Passenger",
+            "email":     "test@pickandgo.kr",
+        },
+        "payment": {"method": "ACC_CREDIT_CARD"},   # Sandbox 테스트 결제
+        "guestInfo": [
+            {"guestFirstName": "Test",
+             "guestLastName":  "Passenger",
+             "guestEmail":     "test@pickandgo.kr"}
+            for _ in range(max(1, people))
+        ],
+    })
+
+    bk         = book_resp["data"]
+    booking_id = bk["bookingId"]
+    hotel_name = bk.get("hotel", {}).get("name", best_hotel.get("hotelId", "N/A"))
+
+    # ── 4단계: 내부 포맷 변환 ─────────────────────────────────────
+    return {
+        "item_type":          "hotel",
+        "partner_name":       "liteapi",
+        "partner_booking_id": booking_id,
+        "status":             "confirmed",
+        "amount":             int(float(amount)) if amount else 0,
+        "currency":           "USD",
+        "details": {
+            "hotel_name": hotel_name,
+            "hotel_id":   best_hotel.get("hotelId"),
+            "check_in":   start,
+            "check_out":  end,
+            "nights":     duration,
+            "rooms":      1,
+        },
+        "error_msg": None,
+    }
+
+
+def _liteapi_cancel_hotel(booking_id: str) -> None:
+    """
+    LiteAPI 숙소 예약 취소 (Saga 롤백용).
+    DELETE /bookings/{bookingId} → HTTP 200
+    """
+    _requests.delete(
+        f"{LITEAPI_BASE}/bookings/{booking_id}",
+        headers=_liteapi_headers(),
+        timeout=LITEAPI_TIMEOUT,
+    ).raise_for_status()
 
 
 async def _real_book_hotel(context: dict) -> dict:
     """
-    실제 Booking.com API 연동 (Phase 2)
-    환경변수 MOCK_HOTEL=false 설정 시 활성화
+    LiteAPI 실 API 숙소 예약 (비동기 래퍼).
+    동기 함수를 asyncio.to_thread로 별도 스레드에서 실행.
+    환경변수 MOCK_HOTEL=false 설정 시 book_parallel()에서 호출됨.
     """
-    raise NotImplementedError("Booking.com API 연동은 Phase 2에서 구현 예정입니다.")
+    try:
+        return await asyncio.to_thread(_liteapi_book_hotel_sync, context)
+    except Exception as e:
+        return {
+            "item_type": "hotel",
+            "partner_name": "liteapi",
+            "partner_booking_id": None,
+            "status": "failed",
+            "amount": 0,
+            "currency": "USD",
+            "details": {},
+            "error_msg": f"LiteAPI 오류: {e}",
+        }
