@@ -938,6 +938,19 @@ class ItineraryGenerator:
         if type_key == '숙소' or db_row.get('category', '') == 'airport':
             staleness_warning = 'none'
 
+        # ── 상세보기 URL 결정 ──────────────────────────────────────────
+        # Kakao: img_url = place.map.kakao.com/... (상세 페이지) → 그대로 사용
+        # Google: img_url = maps.googleapis.com/maps/api/place/photo?... (사진 URL)
+        #         → 브라우저에서 직접 열면 400 에러. Google Maps 좌표 URL로 대체.
+        raw_img_url = db_row.get('img_url', '') or ''
+        if 'maps.googleapis.com/maps/api/place/photo' in raw_img_url:
+            _lat = db_row.get('lat', 0.0)
+            _lng = db_row.get('lng', 0.0)
+            place_detail_url = f"https://www.google.com/maps/search/?api=1&query={_lat},{_lng}"
+        else:
+            # Kakao place_url 또는 기타 소스의 URL을 그대로 사용
+            place_detail_url = raw_img_url
+
         return {
             "time":               time,
             "type":               type_name,
@@ -946,10 +959,10 @@ class ItineraryGenerator:
             "address":            place_address,
             "lat":                db_row['lat'],
             "lng":                db_row['lng'],
-            "url":                db_row.get('img_url', ''),
+            "url":                place_detail_url,
             "raw_score":          db_row.get('score', 80),
-            # [BUG-7 fix] source.unsplash.com 서비스 종료(2024.05) → picsum.photos로 교체
-            "img":                db_row.get('img_url') or "https://picsum.photos/400/300",
+            # Google photo URL은 img 소스로도 부적합할 수 있으므로 picsum 폴백 유지
+            "img":                raw_img_url or "https://picsum.photos/400/300",
             "type_key":           type_key,
             "staleness_warning":  staleness_warning,  # 프론트엔드 경고 배지용
             "sub_category":       db_row.get('sub_category', ''),  # 세부 카테고리
