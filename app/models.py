@@ -119,6 +119,7 @@ class ReservationRequest(BaseModel):
     처리부(일정 생성)의 출력을 그대로 전달받음
     """
     user_id: str = Field(..., description="사용자 식별자")
+    user_email: Optional[str] = Field(default=None, description="예약 확정 이메일 수신 주소 (미입력 시 이메일 발송 생략)")
     itinerary_id: Optional[str] = Field(default=None, description="선택된 일정 ID")
     trip_data: dict = Field(..., description="선택된 일정 전체 데이터 (처리부 출력)")
     start_date: str = Field(..., description="여행 시작일 (YYYY-MM-DD)")

@@ -6,12 +6,47 @@ Sub 1 — 예약 검증부
   1. 예약 요청 정보 수집 (일정, 인원, 결제 금액 등)
   2. 여행 필수 정보 확인
   3. 일정 확인 (시작일 < 종료일)
-  4. 중복 예약 확인 (DB 조회)
+  4. 중복 예약 확인 (DB 실 조회 — reservations 테이블)
   → 오류 있으면 ValidationError 발생 → Sub5 거부 처리
   → 오류 없으면 검증 완료 딕셔너리 반환
 """
+import asyncio
+import sys
+import os
 from datetime import date, datetime
 from typing import Optional
+
+# 프로젝트 루트를 경로에 추가 (db 패키지 접근용)
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
+
+from db.connection import get_db_session
+from db.models import Reservation
+from .sub_metrics import log_attempt
+
+
+def _check_duplicate_sync(user_id: str, itinerary_id: str) -> bool:
+    """
+    DB에서 동일 사용자·일정의 활성 예약을 조회하는 동기 함수.
+    asyncio.to_thread()로 비동기 컨텍스트에서 호출됨.
+
+    조회 조건: user_id 일치 + itinerary_id 일치 + status in ('confirmed', 'pending')
+    연결 실패 시 False 반환(통과) — 보수적 정책: DB 오류로 정상 요청을 막지 않음.
+    """
+    try:
+        with get_db_session() as session:
+            existing = (
+                session.query(Reservation)
+                .filter(
+                    Reservation.user_id      == user_id,
+                    Reservation.itinerary_id == itinerary_id,
+                    Reservation.status.in_(["confirmed", "pending"]),
+                )
+                .first()
+            )
+            return existing is not None
+    except Exception:
+        # DB 접근 불가 시 중복 판정 불가 → 파이프라인 통과 허용
+        return False
 
 
 class ReservationValidationError(Exception):
@@ -88,11 +123,11 @@ async def validate_reservation(req) -> dict:
             retryable=False
         )
 
-    # ── 5. 중복 예약 확인 (DB 조회 — 현재는 Mock 통과) ──────────
-    # TODO: 실 구현 시 DB에서 동일 user_id + start_date 조회
-    # existing = db.query(Reservation).filter_by(user_id=req.user_id, ...).first()
-    # if existing: raise ReservationValidationError("DUPLICATE_RESERVATION", ...)
-    is_duplicate = False  # Mock: 항상 중복 없음
+    # ── 5. 중복 예약 확인 (DB 실 조회) ────────────────────────────
+    itinerary_id_for_check = req.itinerary_id or f"ITIN_{req.user_id.strip()}_{d_start}"
+    is_duplicate = await asyncio.to_thread(
+        _check_duplicate_sync, req.user_id.strip(), itinerary_id_for_check
+    )
     if is_duplicate:
         raise ReservationValidationError(
             "DUPLICATE_RESERVATION",
@@ -103,7 +138,7 @@ async def validate_reservation(req) -> dict:
     # ── 검증 완료: 정제 컨텍스트 반환 ───────────────────────────
     validated_context = {
         "user_id": req.user_id.strip(),
-        "itinerary_id": req.itinerary_id or f"ITIN_{req.user_id}_{d_start}",
+        "itinerary_id": req.itinerary_id or f"ITIN_{req.user_id.strip()}_{d_start}",
         "trip_data": req.trip_data,
         "start_date": str(d_start),
         "end_date": str(d_end),
@@ -120,5 +155,13 @@ async def validate_reservation(req) -> dict:
 
     print(f"[Sub1] ✅ 검증 완료 — user:{req.user_id}, {req.dep_city}→{req.dest_city}, "
           f"{d_start}~{d_end}({duration}일), {req.people}명")
+
+    # ── SRS M-13: 예약 시도 로그 기록 (best-effort) ────────────────
+    # attempt 로그 = 성공률 분모. 실패해도 예약 흐름 유지.
+    await log_attempt(
+        user_id=req.user_id.strip(),
+        itinerary_id=validated_context["itinerary_id"],
+        dest_city=req.dest_city,
+    )
 
     return validated_context
