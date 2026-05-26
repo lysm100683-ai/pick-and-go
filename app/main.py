@@ -23,10 +23,11 @@ from .models import (
     ReservationRequest, ReservationResponse, ReservationFailResponse,
 )
 from .reservation.sub1_validator import validate_reservation, ReservationValidationError
-from .reservation.sub2_external  import book_parallel, BookingFailedError
+from .reservation.sub2_external  import book_parallel, rollback_bookings, BookingFailedError
 from .reservation.sub3_confirmer import confirm_reservation, ConfirmationError
 from .reservation.sub4_storage   import save_reservation, StorageError
 from .reservation.sub5_notifier  import build_success_response, build_fail_response, send_confirmation_notification
+from .reservation.sub_metrics    import log_pipeline_failure, get_stats_summary
 
 # --- FastAPI 앱 초기화 ---
 app = FastAPI(
@@ -157,6 +158,13 @@ async def create_reservation(
     try:
         booking_results = await book_parallel(validated_context)
     except BookingFailedError as e:
+        # SRS M-13: Sub2 실패 로그 (best-effort)
+        await log_pipeline_failure(
+            error_code="BOOKING_FAILED",
+            failed_sub="sub2",
+            user_id=req.user_id,
+            dest_city=req.dest_city,
+        )
         return build_fail_response(
             error_code="BOOKING_FAILED",
             error_message=e.message,
@@ -164,6 +172,12 @@ async def create_reservation(
             failed_items=e.failed_items,
         )
     except Exception as e:
+        await log_pipeline_failure(
+            error_code="EXTERNAL_API_ERROR",
+            failed_sub="sub2",
+            user_id=req.user_id,
+            dest_city=req.dest_city,
+        )
         return build_fail_response(
             error_code="EXTERNAL_API_ERROR",
             error_message=f"외부 예약 서비스 오류: {str(e)}",
@@ -174,6 +188,15 @@ async def create_reservation(
     try:
         confirmed_reservation = await confirm_reservation(validated_context, booking_results)
     except ConfirmationError as e:
+        # Sub2에서 이미 확정된 외부 예약 즉시 취소 (Saga 보상 트랜잭션)
+        await rollback_bookings(booking_results)
+        # SRS M-13: Sub3 실패 로그 (best-effort)
+        await log_pipeline_failure(
+            error_code=e.code,
+            failed_sub="sub3",
+            user_id=req.user_id,
+            dest_city=req.dest_city,
+        )
         return build_fail_response(
             error_code=e.code,
             error_message=e.message,
@@ -184,6 +207,8 @@ async def create_reservation(
     try:
         saved_id = await save_reservation(confirmed_reservation)
     except StorageError as e:
+        # DB 저장 실패 → 외부 예약 즉시 취소 (고아 트랜잭션 방지)
+        await rollback_bookings(confirmed_reservation.get("items", []))
         return build_fail_response(
             error_code=e.code,
             error_message=e.message,
@@ -191,12 +216,15 @@ async def create_reservation(
         )
 
     # ── Sub 5: 결과 안내 ──────────────────────────────────────
-    # 이메일/SMS 발송은 Back그라운드로 분리 → 응답 시간 단축 (SRS M-12 준수)
+    # 이메일/SMS 발송은 BackgroundTasks로 분리 → 응답 시간 단축 (SRS M-12 준수)
     background_tasks.add_task(
         send_confirmation_notification,
         saved_id,
         req.user_id,
         req.dest_city,
+        req.user_email,                                      # 수신자 이메일 (Optional — 없으면 시뮬레이션)
+        confirmed_reservation.get("items", []),              # 항공/숙소 예약 항목
+        float(confirmed_reservation.get("total_amount", 0)),  # 총 결제 금액
     )
 
     result = build_success_response(confirmed_reservation, saved_id)
@@ -207,4 +235,21 @@ async def create_reservation(
         print(f"⚠️  [SLOW] 예약 확정 {elapsed:.3f}s — 목표 ≤15초 초과")
     else:
         print(f"[Reservation] ✅ 완료 — reservation_id:{saved_id} ({elapsed:.3f}s)")
-    return result
+    return result
+
+
+# 4. SRS M-13 예약 성공률 통계 API
+@app.get(
+    "/api/v1/metrics",
+    summary="예약 성공률 통계 (SRS M-13)",
+    description="최근 N일 예약 시도/성공/실패 카운트와 성공률 반환. 기본 7일.",
+)
+async def get_reservation_metrics(days: int = 7):
+    """
+    SRS M-13: 예약 성공률 ≥ 99.9% 측정 결과 반환.
+    Query param:
+      days: 집계 기간 (기본 7, 최대 90)
+    """
+    days = min(max(days, 1), 90)   # 1~90일 제한
+    stats = await get_stats_summary(period_days=days)
+    return stats
