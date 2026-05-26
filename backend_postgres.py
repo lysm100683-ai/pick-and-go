@@ -350,19 +350,19 @@ def get_movement_cache(origin_lat: float, origin_lng: float,
         dest_point = WKTElement(dest_wkt, srid=4326)
         
         # 정방향 또는 역방향 캐시 검색 (거리 기반으로 매칭)
-        # Config.CACHE_MATCH_TOLERANCE_METERS 이내면 동일 좌표로 간주
+        # ST_DWithin → GIST 인덱스(idx_movement_cache_origin/destination) 활용 (ST_Distance < 는 풀 스캔)
         cache = session.query(MovementCache).filter(
             or_(
                 and_(
                     # 정방향: origin → dest
-                    func.ST_Distance(MovementCache.origin, origin_point) < Config.CACHE_MATCH_TOLERANCE_METERS,
-                    func.ST_Distance(MovementCache.destination, dest_point) < Config.CACHE_MATCH_TOLERANCE_METERS,
+                    func.ST_DWithin(MovementCache.origin, origin_point, Config.CACHE_MATCH_TOLERANCE_METERS),
+                    func.ST_DWithin(MovementCache.destination, dest_point, Config.CACHE_MATCH_TOLERANCE_METERS),
                     MovementCache.mode == mode
                 ),
                 and_(
                     # 역방향: dest → origin
-                    func.ST_Distance(MovementCache.origin, dest_point) < Config.CACHE_MATCH_TOLERANCE_METERS,
-                    func.ST_Distance(MovementCache.destination, origin_point) < Config.CACHE_MATCH_TOLERANCE_METERS,
+                    func.ST_DWithin(MovementCache.origin, dest_point, Config.CACHE_MATCH_TOLERANCE_METERS),
+                    func.ST_DWithin(MovementCache.destination, origin_point, Config.CACHE_MATCH_TOLERANCE_METERS),
                     MovementCache.mode == mode
                 )
             )
@@ -385,7 +385,10 @@ def save_movement_cache(origin_lat: float, origin_lng: float,
         is_korea: 한국 여부
     """
     # 이미 캐시된 경우 스킵
-    existing = get_movement_cache(origin_lat, origin_lng, dest_lat, dest_lng, mode)
+    try:
+        existing = get_movement_cache(origin_lat, origin_lng, dest_lat, dest_lng, mode)
+    except Exception:
+        existing = None
     if existing:
         logger.debug(f"이동 시간 캐시 이미 존재 (duration: {existing}초), 스킵")
         return
@@ -417,12 +420,15 @@ def get_real_duration_kakao(lat1, lng1, lat2, lng2, mode='driving'):
         logger.warning("Kakao API 키가 설정되지 않아 기본값(30분) 반환")
         return 30*60
     
-    # 캐시 확인
-    cached = get_movement_cache(lat1, lng1, lat2, lng2, mode)
-    if cached is not None:
-        logger.debug(f"캐시된 이동 시간 사용: {cached}초")
-        return cached
-    
+    # 캐시 확인 (movement_cache 테이블 미존재 시 ProgrammingError 방어)
+    try:
+        cached = get_movement_cache(lat1, lng1, lat2, lng2, mode)
+        if cached is not None:
+            logger.debug(f"캐시된 이동 시간 사용: {cached}초")
+            return cached
+    except Exception as e:
+        logger.warning(f"movement_cache 조회 실패 (테이블 미존재?): {e}")
+
     # API 호출
     if mode == 'transit':
         url = "https://apis-navi.kakaomobility.com/v1/public-transit/directions"
@@ -500,13 +506,17 @@ def get_real_duration_google_bulk(lat1, lng1, candidates, mode='driving'):
             results.append((999999, p))
             continue
         
-        # 캐시 확인
-        cached = get_movement_cache(lat1, lng1, p['lat'], p['lng'], mode)
+        # 캐시 확인 (movement_cache 테이블 미존재 시 방어)
+        try:
+            cached = get_movement_cache(lat1, lng1, p['lat'], p['lng'], mode)
+        except Exception as e:
+            logger.warning(f"movement_cache 조회 실패: {e}")
+            cached = None
         if cached is not None:
             logger.debug(f"캐시된 이동 시간 사용: {p.get('name', 'Unknown')} - {cached}초")
             results.append((cached, p))
             continue
-        
+
         try:
             directions_result = gmaps.directions(
                 origin=f"{lat1},{lng1}",
