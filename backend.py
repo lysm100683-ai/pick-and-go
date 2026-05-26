@@ -1,3 +1,6 @@
+# ⚠️ DEPRECATED: 이 파일은 SQLite 기반 구형 백엔드입니다.
+# 모든 기능은 backend_postgres.py (PostgreSQL + PostGIS)로 이식 완료되었습니다.
+# 추후 전체 안정화 확인 후 삭제 예정입니다. 새 코드에서는 backend_postgres를 사용하세요.
 # backend.py (DB 업데이트 후 캐시 초기화 로직 반영)
 import streamlit as st
 import requests
