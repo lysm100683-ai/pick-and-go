@@ -34,7 +34,6 @@ class TravelCondition(BaseModel):
     
     # 음식 및 편의
     food_prefs: List[str] = []
-    food_allergy_text: str = ""
     with_kids: bool = False
     stroller: bool = False
     barrier_free: bool = False
