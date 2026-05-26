@@ -51,13 +51,14 @@ class OptimizationService:
         
         # 현재 위치가 유효한 경우에만 최적화 시도
         if current_place and current_place.get('lat', 0.0) != 0.0 and current_place.get('lng', 0.0) != 0.0:
-            # 직선거리 기준 상위 10개 선택 (Top-5에서 확대 — 실제 이동 시간이 더 짧은 장소를 놓치지 않도록)
-            candidates.sort(
+            # [BUG-8 fix] in-place sort 대신 sorted()를 사용하여 원본 리스트 보호
+            candidates_sorted_by_dist = sorted(
+                candidates,
                 key=lambda p: self.distance_service.haversine_distance(
                     current_place['lat'], current_place['lng'], p['lat'], p['lng']
                 )
             )
-            top_candidates = candidates[:10]
+            top_candidates = candidates_sorted_by_dist[:10]
             
             # 실제 이동시간 조회 (병렬, 캐시 우선)
             results = self.distance_service.get_travel_times_bulk(

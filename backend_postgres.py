@@ -119,7 +119,7 @@ def translate_address(address: str) -> str:
 
 
 
-def get_places(city: str, category_filter: str = None, limit: int = 50) -> list:
+def get_places(city: str, category_filter: str = None, limit: int = 200) -> list:
     """
     PostGIS를 활용한 장소 조회
     
@@ -131,6 +131,8 @@ def get_places(city: str, category_filter: str = None, limit: int = 50) -> list:
     Returns:
         장소 리스트 (딕셔너리 형태)
     """
+    from datetime import datetime, timezone  # 경과일 계산용
+    
     with get_db_session() as session:
         # 🚀 최적화: 좌표 추출을 메인 쿼리에 포함 (N+1 쿼리 방지)
         query = session.query(
@@ -143,27 +145,62 @@ def get_places(city: str, category_filter: str = None, limit: int = 50) -> list:
             query = query.filter(Place.category.contains(category_filter))
         
         # 평점 높은 순으로 정렬
+        # ★ limit 기본값 200: extract_top_n(일수×5) 이후에도 충분한 풀이 남도록
+        #   limit=50 하드캡이면 cafes, foods가 부족해 fallback 장소가 배치될 수 있음
         query = query.order_by(Place.rating.desc()).limit(limit)
         
         results = query.all()
+        now = datetime.now(timezone.utc)
         
         # ORM 객체를 딕셔너리로 변환
-        return [
-            {
-                'id': p.id,
-                'source': p.source,
-                'name': p.name,
-                'city': p.city,
-                'category': p.category,
-                'lat': lat,
-                'lng': lng,
-                'address': p.address or '',
-                'rating': float(p.rating) if p.rating else 0.0,
-                'img_url': p.img_url or '',
-                'desc': p.description or ''
-            }
-            for p, lng, lat in results
-        ]
+        places = []
+        for p, lng, lat in results:
+            # verified_at 기준 경과 일수 계산
+            # None(미확인) → days_since_verified = None (프론트에서 고위험 처리)
+            days_since_verified = None
+            if p.verified_at:
+                vat = p.verified_at
+                if vat.tzinfo is None:
+                    vat = vat.replace(tzinfo=timezone.utc)
+                days_since_verified = (now - vat).days
+            
+            # updated_at 기준 경과 일수 (점수 최신성 보정용)
+            days_since_updated = None
+            if p.updated_at:
+                uat = p.updated_at
+                if uat.tzinfo is None:
+                    uat = uat.replace(tzinfo=timezone.utc)
+                days_since_updated = (now - uat).days
+            
+            places.append({
+                'id':                   p.id,
+                'source':               p.source,
+                'name':                 p.name,
+                'city':                 p.city,
+                'category':             p.category,
+                'sub_category':         p.sub_category or '',
+                'lat':                  lat,
+                'lng':                  lng,
+                'address':              p.address or '',
+                'rating':               float(p.rating) if p.rating else 0.0,
+                'review_count':         int(p.review_count) if p.review_count else 0,
+                # ★ 별점 분포 데이터 (scoring_service._distribution_bonus()에서 사용)
+                'rating_5star':         int(p.rating_5star) if p.rating_5star else 0,
+                'rating_4star':         int(p.rating_4star) if p.rating_4star else 0,
+                'rating_3star':         int(p.rating_3star) if p.rating_3star else 0,
+                'rating_2star':         int(p.rating_2star) if p.rating_2star else 0,
+                'rating_1star':         int(p.rating_1star) if p.rating_1star else 0,
+                'img_url':              p.img_url or '',
+                'desc':                 p.description or '',
+                # 영업 상태 경고용 필드
+                'verified_at':          p.verified_at.isoformat() if p.verified_at else None,
+                'days_since_verified':  days_since_verified,
+                # 점수 최신성 보정용 필드
+                'updated_at':           p.updated_at.isoformat() if p.updated_at else None,
+                'days_since_updated':   days_since_updated,
+            })
+        
+        return places
 
 
 def get_places_within_radius(lat: float, lng: float, radius_meters: int, 
@@ -468,5 +505,410 @@ def get_real_duration_google_bulk(lat1, lng1, candidates, mode='driving'):
     return results
 
 
-# 🚀 TODO: fetch_google, fetch_kakao 등 데이터 수집 함수도 이식 필요
-# 현재는 travel_logic.py가 backend.py를 import하므로 점진적으로 교체
+
+
+# ===========================================================================
+#  데이터 수집 함수 (Google Places API + Kakao Local API)
+#  review_count(리뷰 수)를 포함하여 DB에 저장
+# ===========================================================================
+
+def _upsert_place(session, place_data: dict) -> bool:
+    """
+    장소 데이터를 DB에 Upsert (없으면 INSERT, 있으면 UPDATE).
+
+    중복 기준: id (primary key)
+    기존 장소의 rating·review_count·description은 새 값으로 갱신.
+    verified_at은 수집 시점으로 갱신 (방금 수집 = 영업 확인 완료와 동일).
+
+    Returns:
+        True  = 신규 삽입
+        False = 기존 업데이트
+    """
+    from geoalchemy2 import WKTElement as WKT
+
+    existing = session.query(Place).filter(Place.id == place_data['id']).first()
+    now = datetime.utcnow()
+
+    # PostGIS POINT(lng lat) 형식
+    location_wkt = WKT(
+        f"POINT({place_data['lng']} {place_data['lat']})",
+        srid=4326
+    )
+
+    if existing:
+        existing.rating        = place_data.get('rating', existing.rating)
+        # review_count: 더 큰 값 유지 (Kakao 0값이 Google 수집분 덮어쓰기 방지)
+        new_review = place_data.get('review_count', 0) or 0
+        existing.review_count  = max(existing.review_count or 0, new_review)
+        existing.description   = place_data.get('desc', existing.description)
+        existing.sub_category  = place_data.get('sub_category', existing.sub_category)
+        existing.img_url       = place_data.get('img_url', existing.img_url)
+        existing.address       = place_data.get('address', existing.address)
+        # ★ 별점 분포: 누적(+) 방식으로 저장
+        #   이유: 수집할 때마다 상위 5개 리뷰 샘플이 쌓이므로,
+        #         회차가 많아질수록 더 신뢰할 수 있는 경향 파악 가능
+        existing.rating_5star  = (existing.rating_5star or 0) + (place_data.get('rating_5star', 0) or 0)
+        existing.rating_4star  = (existing.rating_4star or 0) + (place_data.get('rating_4star', 0) or 0)
+        existing.rating_3star  = (existing.rating_3star or 0) + (place_data.get('rating_3star', 0) or 0)
+        existing.rating_2star  = (existing.rating_2star or 0) + (place_data.get('rating_2star', 0) or 0)
+        existing.rating_1star  = (existing.rating_1star or 0) + (place_data.get('rating_1star', 0) or 0)
+        existing.updated_at    = now
+        existing.verified_at   = now
+        return False
+
+    else:
+        new_place = Place(
+            id           = place_data['id'],
+            source       = place_data['source'],
+            name         = place_data['name'],
+            city         = place_data['city'],
+            category     = place_data.get('category', ''),
+            sub_category = place_data.get('sub_category', ''),
+            location     = location_wkt,
+            address      = place_data.get('address', ''),
+            rating       = place_data.get('rating', 0.0),
+            review_count = place_data.get('review_count', 0),
+            rating_5star = place_data.get('rating_5star', 0),
+            rating_4star = place_data.get('rating_4star', 0),
+            rating_3star = place_data.get('rating_3star', 0),
+            rating_2star = place_data.get('rating_2star', 0),
+            rating_1star = place_data.get('rating_1star', 0),
+            img_url      = place_data.get('img_url', ''),
+            description  = place_data.get('desc', ''),
+            verified_at  = now,
+        )
+        session.add(new_place)
+        return True
+
+
+def fetch_google(city: str, keywords: list, is_domestic: bool = False) -> dict:
+    """
+    Google Places API (Text Search)로 장소 수집 후 DB Upsert.
+
+    수집 필드:
+      - name, lat, lng, rating, user_ratings_total(→review_count),
+        formatted_address, photos, types
+
+    세부 카테고리 매핑 (types 기반):
+      restaurant → 음식점,  cafe → 카페/디저트,
+      tourist_attraction / museum / park → 명소/관광,
+      lodging → 숙소,  bar / night_club → 술집
+
+    Args:
+        city:       도시명 (DB city 필드값)
+        keywords:   검색 키워드 리스트
+        is_domestic: 국내 여부 (현재는 동일 로직, 추후 분기 예정)
+
+    Returns:
+        {"added_count": int, "updated_count": int, "error": str | None}
+    """
+    if not Config.GMAPS_API_KEY or Config.GMAPS_API_KEY == 'YOUR_GOOGLE_MAPS_API_KEY':
+        logger.warning("[fetch_google] GMAPS_API_KEY 미설정 — 수집 건너뜀")
+        return {"added_count": 0, "updated_count": 0, "error": "API key not set"}
+
+    # Google Places types → sub_category 매핑 테이블
+    TYPE_TO_SUB = {
+        "restaurant":          "음식점",
+        "food":                "음식점",
+        "meal_takeaway":       "음식점",
+        "cafe":                "커피전문점",
+        "bakery":              "베이커리",
+        "bar":                 "이자카야",
+        "night_club":          "이자카야",
+        "lodging":             "호텔",
+        "tourist_attraction":  "랜드마크",
+        "museum":              "미술/박물관",
+        "park":                "자연경관",
+        "amusement_park":      "테마파크",
+        "shopping_mall":       "백화점/몰",
+        "department_store":    "백화점/몰",
+        "market":              "전통시장",
+        "art_gallery":         "미술/박물관",
+        "spa":                 "자연경관",
+        "aquarium":            "테마파크",
+        "zoo":                 "테마파크",
+    }
+
+    gmaps_client = googlemaps.Client(key=Config.GMAPS_API_KEY)
+    added_count = 0
+    updated_count = 0
+
+    for keyword in keywords:
+        try:
+            # Google Places Text Search API 호출
+            response = gmaps_client.places(query=keyword, language='ko')
+            results  = response.get('results', [])
+
+            with get_db_session() as session:
+                for place in results:
+                    # ── 필수 필드 존재 확인 ─────────────────────────────
+                    geometry = place.get('geometry', {}).get('location', {})
+                    lat = geometry.get('lat')
+                    lng = geometry.get('lng')
+                    if not lat or not lng:
+                        continue
+
+                    # ── sub_category 결정 (types 중 첫 번째 매핑 우선) ──
+                    types       = place.get('types', [])
+                    sub_cat     = next(
+                        (TYPE_TO_SUB[t] for t in types if t in TYPE_TO_SUB),
+                        ''
+                    )
+                    # types에서 대분류 category 결정
+                    if any(t in ('restaurant', 'food', 'meal_takeaway', 'bar', 'night_club') for t in types):
+                        category = '음식점'
+                    elif any(t in ('cafe', 'bakery') for t in types):
+                        category = '카페/디저트'
+                    elif any(t in ('lodging',) for t in types):
+                        category = '숙소'
+                    else:
+                        category = '명소/관광'
+
+                    # ── 이미지 URL ──────────────────────────────────────
+                    photos    = place.get('photos', [])
+                    photo_ref = photos[0].get('photo_reference', '') if photos else ''
+                    img_url   = (
+                        f"https://maps.googleapis.com/maps/api/place/photo"
+                        f"?maxwidth=400&photoreference={photo_ref}&key={Config.GMAPS_API_KEY}"
+                        if photo_ref else ''
+                    )
+
+                    # ★ Place Details API 호출으로 상위 5개 리뷰의 별점 수집
+                    # Text Search는 리뷰 데이터 미포함 → place_id로 Details 호출
+                    rating_dist = {'rating_5star': 0, 'rating_4star': 0,
+                                   'rating_3star': 0, 'rating_2star': 0, 'rating_1star': 0}
+                    place_id = place.get('place_id', '')
+                    if place_id:
+                        try:
+                            details = gmaps_client.place(
+                                place_id=place_id,
+                                fields=['reviews'],
+                                language='ko'
+                            ).get('result', {})
+                            for review in details.get('reviews', []):
+                                stars = int(review.get('rating', 0))
+                                if stars == 5: rating_dist['rating_5star'] += 1
+                                elif stars == 4: rating_dist['rating_4star'] += 1
+                                elif stars == 3: rating_dist['rating_3star'] += 1
+                                elif stars == 2: rating_dist['rating_2star'] += 1
+                                elif stars == 1: rating_dist['rating_1star'] += 1
+                        except Exception as detail_err:
+                            logger.debug(f"[fetch_google] Details 호출 실패 ({place_id}): {detail_err}")
+
+                    place_data = {
+                        'id':           f"google_{place.get('place_id', '')}",
+                        'source':       'google',
+                        'name':         place.get('name', ''),
+                        'city':         city,
+                        'category':     category,
+                        'sub_category': sub_cat,
+                        'lat':          lat,
+                        'lng':          lng,
+                        'address':      place.get('formatted_address', ''),
+                        'rating':       float(place.get('rating', 0.0)),
+                        'review_count': int(place.get('user_ratings_total', 0)),
+                        # ★ 별점 분포 (Place Details 상위 5개 리뷰 샘플)
+                        **rating_dist,
+                        'img_url':      img_url,
+                        'desc':         ', '.join(types[:3]),
+                    }
+
+                    is_new = _upsert_place(session, place_data)
+                    if is_new:
+                        added_count += 1
+                    else:
+                        updated_count += 1
+
+        except googlemaps.exceptions.ApiError as e:
+            logger.error(f"[fetch_google] API 오류 ({keyword}): {e}")
+        except Exception as e:
+            logger.error(f"[fetch_google] 예상치 못한 오류 ({keyword}): {e}", exc_info=True)
+
+    logger.info(f"[fetch_google] '{city}' 수집 완료 — 신규: {added_count}, 갱신: {updated_count}")
+    return {"added_count": added_count, "updated_count": updated_count, "error": None}
+
+
+def fetch_kakao(city: str, keywords: list) -> dict:
+    """
+    Kakao Local API (keyword/category 검색)로 장소 수집 후 DB Upsert.
+
+    수집 필드:
+      - place_name, x(lng), y(lat), road_address_name,
+        category_group_code(→category), place_url
+
+    Kakao category_group_code → sub_category 매핑:
+      FD6(음식점), CE7(카페), CS2(편의점→제외),
+      AT4(관광명소), CT1(문화시설), AD5(숙박), OL7(주유소→제외),
+      SO1(병원→제외), MT1(마트→제외)
+
+    참고: Kakao는 review_count를 공식 API에서 제공하지 않음.
+         후기 수는 0으로 저장하고, Google 수집분에서 보완.
+
+    Returns:
+        {"added_count": int, "updated_count": int, "error": str | None}
+    """
+    if not Config.KAKAO_REST_KEY or Config.KAKAO_REST_KEY == 'YOUR_KAKAO_REST_API_KEY':
+        logger.warning("[fetch_kakao] KAKAO_REST_KEY 미설정 — 수집 건너뜀")
+        return {"added_count": 0, "updated_count": 0, "error": "API key not set"}
+
+    # Kakao category_group_code → (category, sub_category) 매핑
+    CODE_TO_CAT = {
+        'FD6': ('음식점',     '음식점'),
+        'CE7': ('카페/디저트','커피전문점'),
+        'AT4': ('명소/관광',  '랜드마크'),
+        'CT1': ('명소/관광',  '미술/박물관'),
+        'AD5': ('숙소',       '호텔'),
+    }
+    SKIP_CODES = {'CS2', 'OL7', 'SO1', 'MT1', 'HP8', 'PM9'}  # 제외 카테고리
+
+    headers     = {"Authorization": f"KakaoAK {Config.KAKAO_REST_KEY}"}
+    url         = "https://dapi.kakao.com/v2/local/search/keyword.json"
+    added_count = 0
+    updated_count = 0
+
+    for keyword in keywords:
+        try:
+            page = 1
+            while page <= 3:  # 최대 3페이지 (페이지당 15개 = 최대 45개/키워드)
+                params = {
+                    "query": keyword,
+                    "size":  15,
+                    "page":  page,
+                }
+                resp = requests.get(url, headers=headers, params=params, timeout=5)
+
+                if resp.status_code != 200:
+                    logger.warning(f"[fetch_kakao] HTTP {resp.status_code} ({keyword})")
+                    break
+
+                data     = resp.json()
+                docs     = data.get('documents', [])
+                meta     = data.get('meta', {})
+
+                with get_db_session() as session:
+                    for doc in docs:
+                        # ── 필수 필드 확인 ──────────────────────────────
+                        try:
+                            lat = float(doc.get('y', 0))
+                            lng = float(doc.get('x', 0))
+                        except (ValueError, TypeError):
+                            continue
+                        if not lat or not lng:
+                            continue
+
+                        # ── 카테고리 코드 필터링 ────────────────────────
+                        code = doc.get('category_group_code', '')
+                        if code in SKIP_CODES:
+                            continue
+
+                        cat, sub_cat = CODE_TO_CAT.get(code, ('명소/관광', ''))
+
+                        # category_name에서 세부 카테고리 정제
+                        cat_name = doc.get('category_name', '')
+                        if '한식' in cat_name:   sub_cat = '한식'
+                        elif '일식' in cat_name: sub_cat = '일식'
+                        elif '중식' in cat_name: sub_cat = '중식'
+                        elif '양식' in cat_name: sub_cat = '양식'
+                        elif '분식' in cat_name: sub_cat = '분식'
+                        elif '해산물' in cat_name or '횟집' in cat_name: sub_cat = '해산물'
+                        elif '고기' in cat_name or '구이' in cat_name:   sub_cat = '고기/구이'
+                        elif '베이커리' in cat_name or '빵' in cat_name: sub_cat = '베이커리'
+                        elif '호텔' in cat_name:  sub_cat = '호텔'
+                        elif '펜션' in cat_name:  sub_cat = '호텔'
+                        elif '박물관' in cat_name or '미술관' in cat_name: sub_cat = '미술/박물관'
+                        elif '공원' in cat_name:  sub_cat = '자연경관'
+                        elif '테마파크' in cat_name or '놀이공원' in cat_name: sub_cat = '테마파크'
+                        elif '시장' in cat_name:  sub_cat = '전통시장'
+
+                        place_data = {
+                            'id':           f"kakao_{doc.get('id', '')}",
+                            'source':       'kakao',
+                            'name':         doc.get('place_name', ''),
+                            'city':         city,
+                            'category':     cat,
+                            'sub_category': sub_cat,
+                            'lat':          lat,
+                            'lng':          lng,
+                            'address':      doc.get('road_address_name', '') or doc.get('address_name', ''),
+                            'rating':       0.0,         # Kakao는 평점 미제공 → 0
+                            # ★ Kakao 공식 API는 review_count 미제공 → 0으로 저장
+                            #    Google 수집분에서 동일 장소 데이터로 보완됨
+                            'review_count': 0,
+                            'img_url':      doc.get('place_url', ''),
+                            'desc':         cat_name,
+                        }
+
+                        is_new = _upsert_place(session, place_data)
+                        if is_new:
+                            added_count += 1
+                        else:
+                            updated_count += 1
+
+                # 마지막 페이지 확인
+                if meta.get('is_end', True):
+                    break
+                page += 1
+
+        except requests.exceptions.Timeout:
+            logger.error(f"[fetch_kakao] 타임아웃 ({keyword})")
+        except Exception as e:
+            logger.error(f"[fetch_kakao] 예상치 못한 오류 ({keyword}): {e}", exc_info=True)
+
+    logger.info(f"[fetch_kakao] '{city}' 수집 완료 — 신규: {added_count}, 갱신: {updated_count}")
+    return {"added_count": added_count, "updated_count": updated_count, "error": None}
+
+
+def fetch_all_data(city: str, keywords: list, is_domestic: bool = True) -> dict:
+    """
+    Google과 Kakao를 병렬로 실행하여 장소 데이터를 수집.
+    국내 여행지는 Kakao를 우선 수집하고, Google로 보완.
+    해외 여행지는 Google만 수집.
+
+    Args:
+        city:        도시명
+        keywords:    검색 키워드 리스트
+        is_domestic: True = 국내 (Kakao+Google), False = 해외 (Google만)
+
+    Returns:
+        {"added_count": int, "updated_count": int, "sources": list}
+    """
+    total_added   = 0
+    total_updated = 0
+    sources_used  = []
+
+    if is_domestic:
+        # 국내: Kakao + Google 병렬 수집
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+            future_kakao  = executor.submit(fetch_kakao,  city, keywords)
+            future_google = executor.submit(fetch_google, city, keywords, is_domestic)
+
+            kakao_result  = future_kakao.result()
+            google_result = future_google.result()
+
+        if not kakao_result.get('error'):
+            total_added   += kakao_result.get('added_count',   0)
+            total_updated += kakao_result.get('updated_count', 0)
+            sources_used.append('kakao')
+
+        if not google_result.get('error'):
+            total_added   += google_result.get('added_count',   0)
+            total_updated += google_result.get('updated_count', 0)
+            sources_used.append('google')
+    else:
+        # 해외: Google만 수집
+        google_result = fetch_google(city, keywords, is_domestic=False)
+        if not google_result.get('error'):
+            total_added   += google_result.get('added_count',   0)
+            total_updated += google_result.get('updated_count', 0)
+            sources_used.append('google')
+
+    logger.info(
+        f"[fetch_all_data] '{city}' 전체 수집 완료 — "
+        f"신규: {total_added}, 갱신: {total_updated}, 소스: {sources_used}"
+    )
+    return {
+        "added_count":   total_added,
+        "updated_count": total_updated,
+        "sources":       sources_used,
+    }
+

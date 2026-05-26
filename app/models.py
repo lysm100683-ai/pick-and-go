@@ -58,6 +58,17 @@ class DBUpdateRequest(BaseModel):
     dest_city: str
     styles: List[str]
 
+# --- [InsufficientPlacesDetail] 장소 부족 에러 응답 ---
+class InsufficientPlacesDetail(BaseModel):
+    """장소 데이터 부족 시 프론트엔드로 전달하는 구조화된 에러 정보"""
+    error_code: str = "INSUFFICIENT_PLACES"
+    city: str
+    available: int
+    required: int
+    budget_level: str
+    relaxed: bool          # True이면 이미 완화 시도함 → '조건 완화' 버튼 비활성화
+    message: str
+
 # ----------------------------------------------------------------
 # 2. 응답 모델 (Response Models)
 # ----------------------------------------------------------------

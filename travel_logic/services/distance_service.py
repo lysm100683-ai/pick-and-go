@@ -33,7 +33,7 @@ class DistanceService:
         """
         try:
             lat1, lon1, lat2, lon2 = map(float, [lat1, lon1, lat2, lon2])
-        except:
+        except (ValueError, TypeError):
             return 99999
         
         # 0.0 좌표는 유효하지 않다고 간주
@@ -111,7 +111,7 @@ class DistanceService:
                     dest = future_map[future]
                     try:
                         results.append((future.result(), dest))
-                    except:
+                    except Exception:
                         results.append((999999, dest))
             
             return results

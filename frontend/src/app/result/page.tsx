@@ -34,7 +34,8 @@ export default function ResultPage() {
     if (!userData) return;
     setIsRegenerating(true);
     try {
-      const res = await fetch("https://pick-and-go-1.onrender.com/api/v1/generate", {
+      const API_BASE = process.env.NEXT_PUBLIC_API_URL || "https://pick-and-go-1.onrender.com";
+      const res = await fetch(`${API_BASE}/api/v1/generate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(userData),
@@ -61,7 +62,8 @@ export default function ResultPage() {
     if (!confirm("백그라운드에서 장소 데이터를 새로 수집합니다. 진행하시겠습니까?")) return;
     
     try {
-      const res = await fetch("https://pick-and-go-1.onrender.com/api/v1/update-db", {
+      const API_BASE = process.env.NEXT_PUBLIC_API_URL || "https://pick-and-go-1.onrender.com";
+      const res = await fetch(`${API_BASE}/api/v1/update-db`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ dest_city: userData.dest_city, styles: userData.style }),
@@ -189,6 +191,23 @@ export default function ResultPage() {
                         <span className="px-2.5 py-1 bg-slate-50 border border-slate-200 text-slate-600 rounded-md text-xs font-medium">
                           {place.type}
                         </span>
+                        {/* 영업 상태 경고 배지 — staleness_warning 필드 기반 */}
+                        {place.staleness_warning === 'danger' && (
+                          <span
+                            title="방문 전 영업 여부를 반드시 확인하세요. 장기간 정보가 업데이트되지 않았습니다."
+                            className="flex items-center gap-1 px-2 py-0.5 bg-red-50 border border-red-200 text-red-600 rounded-md text-xs font-semibold"
+                          >
+                            🔴 영업 확인 필요
+                          </span>
+                        )}
+                        {place.staleness_warning === 'caution' && (
+                          <span
+                            title="정보가 6개월 이상 갱신되지 않았습니다. 방문 전 확인을 권장합니다."
+                            className="flex items-center gap-1 px-2 py-0.5 bg-amber-50 border border-amber-200 text-amber-600 rounded-md text-xs font-semibold"
+                          >
+                            🟡 정보 확인 권장
+                          </span>
+                        )}
                       </div>
                       <h5 className="text-lg font-bold text-slate-800 mb-1 group-hover:text-blue-600 transition-colors">{place.name}</h5>
                       <p className="text-sm text-slate-500 mb-4 leading-relaxed">{place.desc}</p>

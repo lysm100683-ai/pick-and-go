@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Plane, Calendar, Users, MapPin, Wallet, Compass, Car, Home as HomeIcon, Camera, Utensils, Briefcase, Info, Sparkles } from "lucide-react";
+import { Plane, Calendar, Users, MapPin, Wallet, Compass, Car, Home as HomeIcon, Camera, Utensils, Briefcase, Info, Sparkles, AlertTriangle, RefreshCw, Search } from "lucide-react";
 import { format, addDays } from "date-fns";
 import { useRouter } from "next/navigation";
 
@@ -57,6 +57,17 @@ export default function Home() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState("");
 
+  // 장소 부족 모달 상태
+  const [insufficientError, setInsufficientError] = useState<{
+    city: string;
+    available: number;
+    required: number;
+    budget_level: string;
+    relaxed: boolean;
+    message: string;
+  } | null>(null);
+  const [modalLoading, setModalLoading] = useState<"relax" | "fetch" | null>(null);
+
   const handleChange = (e: any) => {
     const { name, value, type, checked } = e.target;
     setFormData({
@@ -79,24 +90,35 @@ export default function Home() {
     e.preventDefault();
     setIsSubmitting(true);
     setErrorMsg("");
+    setInsufficientError(null);
     
     try {
-      const res = await fetch("https://pick-and-go-1.onrender.com/api/v1/generate", {
+      const API_BASE = process.env.NEXT_PUBLIC_API_URL || "https://pick-and-go-1.onrender.com";
+      const res = await fetch(`${API_BASE}/api/v1/generate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(formData),
       });
       
+      if (res.status === 422) {
+        // 장소 부족 에러: 모달 표시
+        const errData = await res.json().catch(() => ({}));
+        if (errData.error_code === "INSUFFICIENT_PLACES") {
+          setInsufficientError(errData);
+          setIsSubmitting(false);
+          return;
+        }
+        throw new Error(errData.detail || `서버 에러 (${res.status})`);
+      }
+
       if (!res.ok) {
         const errData = await res.json().catch(() => ({}));
         throw new Error(errData.detail || `서버 에러 (${res.status})`);
       }
       
       const data = await res.json();
-      
       localStorage.setItem("api_result", JSON.stringify(data));
       localStorage.setItem("form_data", JSON.stringify(formData));
-      
       router.push("/result");
       
     } catch (err: any) {
@@ -106,8 +128,151 @@ export default function Home() {
     }
   };
 
+  // 조건 완화하여 재생성
+  const handleRelaxedRetry = async () => {
+    setModalLoading("relax");
+    try {
+      const API_BASE = process.env.NEXT_PUBLIC_API_URL || "https://pick-and-go-1.onrender.com";
+      const res = await fetch(`${API_BASE}/api/v1/generate-relaxed`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(formData),
+      });
+      if (res.status === 422) {
+        const errData = await res.json().catch(() => ({}));
+        if (errData.error_code === "INSUFFICIENT_PLACES") {
+          setInsufficientError(errData);
+          return;
+        }
+      }
+      if (!res.ok) throw new Error("조건 완화 재생성 실패");
+      const data = await res.json();
+      localStorage.setItem("api_result", JSON.stringify(data));
+      localStorage.setItem("form_data", JSON.stringify(formData));
+      setInsufficientError(null);
+      router.push("/result");
+    } catch (err: any) {
+      setErrorMsg(err.message);
+      setInsufficientError(null);
+    } finally {
+      setModalLoading(null);
+    }
+  };
+
+  // 실시간 검색 후 재생성
+  const handleFetchRetry = async () => {
+    setModalLoading("fetch");
+    try {
+      const API_BASE = process.env.NEXT_PUBLIC_API_URL || "https://pick-and-go-1.onrender.com";
+      const res = await fetch(`${API_BASE}/api/v1/generate-fetch`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(formData),
+      });
+      if (res.status === 422) {
+        const errData = await res.json().catch(() => ({}));
+        if (errData.error_code === "INSUFFICIENT_PLACES") {
+          setInsufficientError(errData);
+          return;
+        }
+      }
+      if (!res.ok) throw new Error("실시간 검색 후 재생성 실패");
+      const data = await res.json();
+      localStorage.setItem("api_result", JSON.stringify(data));
+      localStorage.setItem("form_data", JSON.stringify(formData));
+      setInsufficientError(null);
+      router.push("/result");
+    } catch (err: any) {
+      setErrorMsg(err.message);
+      setInsufficientError(null);
+    } finally {
+      setModalLoading(null);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-sky-50 text-slate-800 font-sans selection:bg-blue-200">
+
+      {/* ─── 장소 부족 모달 ─── */}
+      {insufficientError && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+          <div className="w-full max-w-md bg-white rounded-3xl shadow-2xl p-8 space-y-6">
+            {/* 타이틀 */}
+            <div className="flex items-center gap-3">
+              <div className="flex-shrink-0 w-12 h-12 bg-amber-100 rounded-2xl flex items-center justify-center">
+                <AlertTriangle className="w-6 h-6 text-amber-500" />
+              </div>
+              <div>
+                <h3 className="text-lg font-bold text-slate-800">장소 데이터가 부족합니다</h3>
+                <p className="text-sm text-slate-500 mt-0.5">
+                  {insufficientError.city} · 예산: {insufficientError.budget_level}
+                </p>
+              </div>
+            </div>
+
+            {/* 안내 메시지 */}
+            <p className="text-sm text-slate-600 leading-relaxed bg-amber-50 border border-amber-100 rounded-xl p-4">
+              {insufficientError.message}
+            </p>
+
+            {/* 선택 버튼 */}
+            <div className="space-y-3">
+              {/* 옵션 1: 조건 완화 */}
+              <button
+                id="btn-relax-filter"
+                onClick={handleRelaxedRetry}
+                disabled={insufficientError.relaxed || modalLoading !== null}
+                className={`w-full flex items-center gap-3 px-5 py-4 rounded-2xl font-semibold text-sm transition-all
+                  ${insufficientError.relaxed
+                    ? 'bg-slate-100 text-slate-400 cursor-not-allowed'
+                    : 'bg-blue-600 hover:bg-blue-500 text-white shadow-lg shadow-blue-500/30'}`}
+              >
+                {modalLoading === "relax"
+                  ? <RefreshCw className="w-5 h-5 animate-spin" />
+                  : <RefreshCw className="w-5 h-5" />}
+                <div className="text-left">
+                  <div className="font-bold">
+                    {insufficientError.relaxed ? '이미 조건 완화 시도함' : '평점 기준 완화하여 재생성'}
+                  </div>
+                  {!insufficientError.relaxed && (
+                    <div className="text-xs opacity-80 mt-0.5">
+                      예산 '{insufficientError.budget_level}' 평점 기준을 한 단계 낙춰 더 많은 장소를 포함합니다
+                    </div>
+                  )}
+                </div>
+              </button>
+
+              {/* 옵션 2: 실시간 검색 */}
+              <button
+                id="btn-fetch-live"
+                onClick={handleFetchRetry}
+                disabled={modalLoading !== null}
+                className="w-full flex items-center gap-3 px-5 py-4 bg-emerald-600 hover:bg-emerald-500 text-white rounded-2xl font-semibold text-sm shadow-lg shadow-emerald-500/30 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {modalLoading === "fetch"
+                  ? <Search className="w-5 h-5 animate-pulse" />
+                  : <Search className="w-5 h-5" />}
+                <div className="text-left">
+                  <div className="font-bold">실시간 검색 후 재생성</div>
+                  <div className="text-xs opacity-80 mt-0.5">
+                    Google/Kakao에서 실시간으로 장소를 추가 수집한 후 다시 생성합니다 (약 30초 소요)
+                  </div>
+                </div>
+              </button>
+
+              {/* 취소 */}
+              <button
+                id="btn-cancel-insufficient"
+                onClick={() => setInsufficientError(null)}
+                disabled={modalLoading !== null}
+                className="w-full px-5 py-3 text-slate-500 hover:text-slate-800 text-sm font-medium transition-colors disabled:opacity-50"
+              >
+                취소하고 조건 수정하기
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       {/* 화사한 배경 그라데이션 */}
       <div className="fixed inset-0 -z-10 bg-gradient-to-br from-blue-50 via-white to-sky-100"></div>
       
@@ -367,23 +532,29 @@ export default function Home() {
             <div className="p-5 bg-rose-50/50 border border-rose-100 rounded-2xl">
               <label className="text-sm font-bold text-rose-800 mb-4 block">동행자 맞춤 및 특별 시설 요구사항</label>
               <div className="flex flex-wrap gap-4">
-                <label className="flex items-center gap-3 cursor-pointer group bg-white px-4 py-2.5 rounded-xl shadow-sm border border-slate-100 hover:border-rose-200 transition-colors">
+                <label className="flex items-center gap-3 cursor-not-allowed group bg-white/60 px-4 py-2.5 rounded-xl shadow-sm border border-slate-100 opacity-60">
                   <div className="relative flex items-center">
-                    <input type="checkbox" name="barrier_free" checked={formData.barrier_free} onChange={handleChange} className="peer sr-only" />
-                    <div className="w-5 h-5 bg-slate-100 border border-slate-300 rounded transition-colors peer-checked:bg-rose-500 peer-checked:border-rose-500 flex items-center justify-center">
-                      <svg className="w-3.5 h-3.5 text-white opacity-0 peer-checked:opacity-100" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="3"><path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7"></path></svg>
+                    <input type="checkbox" name="barrier_free" checked={false} onChange={() => {}} className="peer sr-only" disabled />
+                    <div className="w-5 h-5 bg-slate-100 border border-slate-300 rounded flex items-center justify-center">
+                      <svg className="w-3.5 h-3.5 text-white opacity-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="3"><path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7"></path></svg>
                     </div>
                   </div>
-                  <span className="text-slate-700 font-medium group-hover:text-rose-600 text-sm">♿ 휠체어 전용 시설 (Barrier Free)</span>
+                  <div className="flex flex-col">
+                    <span className="text-slate-500 font-medium text-sm">♿ 휠체어 전용 시설 (Barrier Free)</span>
+                    <span className="text-xs text-amber-600 font-semibold mt-0.5">⏳ 데이터 연동 준비중 — 현재 지원되지 않습니다</span>
+                  </div>
                 </label>
-                <label className="flex items-center gap-3 cursor-pointer group bg-white px-4 py-2.5 rounded-xl shadow-sm border border-slate-100 hover:border-rose-200 transition-colors">
+                <label className="flex items-center gap-3 cursor-not-allowed group bg-white/60 px-4 py-2.5 rounded-xl shadow-sm border border-slate-100 opacity-60">
                   <div className="relative flex items-center">
-                    <input type="checkbox" name="stroller" checked={formData.stroller} onChange={handleChange} className="peer sr-only" />
-                    <div className="w-5 h-5 bg-slate-100 border border-slate-300 rounded transition-colors peer-checked:bg-orange-500 peer-checked:border-orange-500 flex items-center justify-center">
-                      <svg className="w-3.5 h-3.5 text-white opacity-0 peer-checked:opacity-100" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="3"><path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7"></path></svg>
+                    <input type="checkbox" name="stroller" checked={false} onChange={() => {}} className="peer sr-only" disabled />
+                    <div className="w-5 h-5 bg-slate-100 border border-slate-300 rounded flex items-center justify-center">
+                      <svg className="w-3.5 h-3.5 text-white opacity-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="3"><path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7"></path></svg>
                     </div>
                   </div>
-                  <span className="text-slate-700 font-medium group-hover:text-orange-600 text-sm">🍼 유모차 사용 가능한 평지 위주</span>
+                  <div className="flex flex-col">
+                    <span className="text-slate-500 font-medium text-sm">🍼 유모차 사용 가능한 평지 위주</span>
+                    <span className="text-xs text-amber-600 font-semibold mt-0.5">⏳ 데이터 연동 준비중 — 현재 지원되지 않습니다</span>
+                  </div>
                 </label>
                 <label className="flex items-center gap-3 cursor-pointer group bg-white px-4 py-2.5 rounded-xl shadow-sm border border-slate-100 hover:border-rose-200 transition-colors">
                   <div className="relative flex items-center">
