@@ -289,6 +289,8 @@ class ClusteringService:
         num_days = len(clusters)
 
         # ① 빈 클러스터: 가장 큰 클러스터에서 절반 이동
+        # [C-3 fix] len(src) >= 2 조건이면 최대 클러스터가 1개일 때 이전 불가 → 빈 날 발생.
+        # len(src) >= 1 로 완화하여 최소 1개라도 이전.
         for i in range(num_days):
             if not clusters[i]:
                 largest_idx = max(range(num_days), key=lambda j: len(clusters[j]))
@@ -297,6 +299,10 @@ class ClusteringService:
                     half = len(src) // 2
                     clusters[i] = src[half:]
                     clusters[largest_idx] = src[:half]
+                elif len(src) == 1:
+                    # 최대 클러스터도 1개뿐이면 그것만 이전 (빈 날 방지 우선)
+                    clusters[i] = src[:]
+                    clusters[largest_idx] = []
 
         # ② 크기 균등화: Haversine 거리 기반 스마트 양도 (최대 10회 순환)
         #

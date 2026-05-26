@@ -263,9 +263,11 @@ class TSPService:
     ) -> List[int]:
         """
         2-Opt 후 재정렬된 경로의 구간별 이동시간을 Haversine 근사로 계산.
-        (60km/h 가정 → 실제 API 캐시 대비 빠른 근사값)
+        [H-4 fix] 45km/h (기존 60km/h): Haversine은 직선거리이므로 실제 도로 대비
+        20-40% 짧음. 45km/h로 낮춰 보수적(큰) 이동시간을 추정하여
+        Phase 4 호텔 앵커링 기준(90분 임계치)이 적절히 발동되도록 조정.
         """
-        SPEED_KMH = 60.0
+        SPEED_KMH = 45.0
 
         def _hav(lat1, lng1, lat2, lng2) -> float:
             R = 6371.0

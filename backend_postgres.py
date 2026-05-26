@@ -60,8 +60,12 @@ def check_place_status(lat: float, lng: float, name: str) -> bool:
     if not Config.GMAPS_API_KEY or Config.GMAPS_API_KEY == 'YOUR_GOOGLE_MAPS_API_KEY':
         return True  # API 키 없으면 모든 장소 통과
 
+    # [H-1 fix] 기존: googlemaps.Client(key=...) 매번 새 인스턴스 생성
+    #           수정: _get_gmaps_client() 싱글톤 재사용
     try:
-        gmaps = googlemaps.Client(key=Config.GMAPS_API_KEY)
+        gmaps = _get_gmaps_client()
+        if gmaps is None:
+            return True
 
         # ① Find Place로 place_id 획득
         find_result = gmaps.find_place(

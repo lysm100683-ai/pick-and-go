@@ -344,7 +344,9 @@ class ItineraryGenerator:
 
         # 장소 풀 생성 및 셔플
         # pool_sights: sight_clusters가 없을 경우를 대비한 fallback 전체 풀
+        # [C-6 fix] 시드 고정 → 동일 입력이면 동일 결과 보장 (재현성 + 캐시 활용)
         pool_sights, pool_foods, pool_cafes = all_sights[:], all_foods[:], all_cafes[:]
+        random.seed(42)
         random.shuffle(pool_sights)
         random.shuffle(pool_foods)
         random.shuffle(pool_cafes)
@@ -377,19 +379,26 @@ class ItineraryGenerator:
 
         # [BUG-4 fix] 전략이 반환한 num_sights가 PACE 상한을 초과하면
         # 슬롯 수를 재조정하고 daily_schedule도 다시 생성한다.
+        # [H-3 fix] distribution dict도 동기화 (로컬 변수만 줄이면 이후 로직과 불일치)
         if num_sights > max_sights_per_day:
             num_sights = max_sights_per_day
+            distribution['sights'] = num_sights   # distribution 동기화
             daily_schedule = self._create_daily_schedule(num_sights, num_foods, num_cafes)
 
         # ② 동행자별 체류시간 배율 (부모님 동반: ×1.2, 아이 동반: ×1.3)
+        # [H-2 fix] max() → 곱셈 누적: 아이+부모님 동반 시 1.0×1.2×1.3 = 1.56x 적용
+        #           (기존 max()는 1.3만 적용되어 세대 복합 여행의 여유시간 과소평가)
         companions = user_data.get('companions', [])
         stay_multiplier: float = COMPANION_STAY_MULTIPLIER.get('default', 1.0)
         for companion_key, multiplier in COMPANION_STAY_MULTIPLIER.items():
             if companion_key != 'default' and companion_key in companions:
-                stay_multiplier = max(stay_multiplier, multiplier)
+                stay_multiplier *= multiplier
         # with_kids=True도 아이 동반으로 처리
         if user_data.get('with_kids', False):
-            stay_multiplier = max(stay_multiplier, COMPANION_STAY_MULTIPLIER.get('아이 동반', 1.3))
+            kids_mult = COMPANION_STAY_MULTIPLIER.get('아이 동반', 1.3)
+            # 이미 아이 동반 배율이 적용됐으면 중복 적용 방지
+            if '아이 동반' not in companions:
+                stay_multiplier *= kids_mult
         
         # ── [Phase 4 결과 수신] 확정된 박별 숙소 사용 ──────────────────────
         # Phase 4(HotelAnchorService)가 이동시간을 분석해 최적 위치로 결정한 숙소 리스트.

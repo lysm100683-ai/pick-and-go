@@ -28,7 +28,7 @@ export default function ResultPage() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [currentSubStep, setCurrentSubStep] = useState(0);
   const [userId, setUserId] = useState("user_traveler");
-  const [email, setEmail] = useState("onboarding@resend.dev"); // Resend 샌드박스 기본 이메일
+  const [email, setEmail] = useState(""); // [H-6 fix] 기본값 제거: 샌드박스 주소 하드코딩 → 사용자가 직접 입력
   const [paymentMethod, setPaymentMethod] = useState("card");
   const [reservationResult, setReservationResult] = useState<any>(null);
   const [reservationError, setReservationError] = useState<any>(null);
@@ -39,13 +39,31 @@ export default function ResultPage() {
   const [isRouteLoading, setIsRouteLoading] = useState(false);
 
   // 1. 초기 데이터 로드 (localStorage)
+  // [H-7 fix] 24시간 초과 데이터 무효화: 과거 일정이 그대로 표시되는 문제 방지
+  const RESULT_TTL_MS = 24 * 60 * 60 * 1000; // 24시간
   useEffect(() => {
     const savedResult = localStorage.getItem("api_result");
     const savedForm = localStorage.getItem("form_data");
-    
+
     if (savedResult && savedForm) {
       try {
-        setApiData(JSON.parse(savedResult));
+        const parsed = JSON.parse(savedResult);
+        // 새 형식 { data, savedAt } 처리; 구 형식(배열 직접)은 그대로 수용
+        if (parsed && typeof parsed === 'object' && 'savedAt' in parsed) {
+          const age = Date.now() - parsed.savedAt;
+          if (age > RESULT_TTL_MS) {
+            // 만료: localStorage 삭제 후 메인으로 리다이렉트
+            localStorage.removeItem("api_result");
+            localStorage.removeItem("form_data");
+            console.warn("저장된 일정이 24시간을 초과하여 만료되었습니다.");
+            setIsLoading(false);
+            return;
+          }
+          setApiData(parsed.data);
+        } else {
+          // 구 형식 호환 처리
+          setApiData(parsed);
+        }
         setUserData(JSON.parse(savedForm));
       } catch (e) {
         console.error("Failed to parse saved data", e);
@@ -270,7 +288,12 @@ export default function ResultPage() {
   // 🎫 5단계 예약 파이프라인 호출 함수
   const handleConfirmReservation = async () => {
     if (!userData || !apiData) return;
-    
+    // [H-6 fix] 이메일 미입력 차단
+    if (!email || !email.includes('@')) {
+      setReservationError("이메일 주소를 올바르게 입력해 주세요.");
+      return;
+    }
+
     setIsProcessing(true);
     setReservationError(null);
     setReservationResult(null);
@@ -411,15 +434,17 @@ export default function ResultPage() {
 
                   <div className="space-y-2">
                     <label className="text-xs font-bold text-slate-600 flex items-center gap-1.5">
-                      <Mail className="w-3.5 h-3.5" /> 티켓 수신 이메일 주소
+                      <Mail className="w-3.5 h-3.5" /> 티켓 수신 이메일 주소 <span className="text-red-500">*</span>
                     </label>
-                    <input 
-                      type="email" 
-                      value={email} 
+                    <input
+                      type="email"
+                      required
+                      value={email}
                       onChange={(e) => setEmail(e.target.value)}
-                      className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500" 
-                      placeholder="E-Ticket을 받을 이메일을 적어주세요"
+                      className={`w-full bg-slate-50 border rounded-xl px-4 py-3 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500 ${!email ? 'border-red-300' : 'border-slate-200'}`}
+                      placeholder="E-Ticket을 받을 이메일을 입력하세요 (필수)"
                     />
+                    {!email && <p className="text-[11px] text-red-400 font-medium">이메일을 입력해야 예약을 진행할 수 있습니다.</p>}
                     <p className="text-[11px] text-slate-400 font-medium">※ Resend API Sandbox 연동 중으로 실발송 성공을 보장합니다.</p>
                   </div>
 

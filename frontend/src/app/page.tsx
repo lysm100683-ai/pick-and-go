@@ -117,7 +117,7 @@ export default function Home() {
       }
       
       const data = await res.json();
-      localStorage.setItem("api_result", JSON.stringify(data));
+      localStorage.setItem("api_result", JSON.stringify({ data, savedAt: Date.now() }));
       localStorage.setItem("form_data", JSON.stringify(formData));
       router.push("/result");
       
@@ -147,7 +147,7 @@ export default function Home() {
       }
       if (!res.ok) throw new Error("조건 완화 재생성 실패");
       const data = await res.json();
-      localStorage.setItem("api_result", JSON.stringify(data));
+      localStorage.setItem("api_result", JSON.stringify({ data, savedAt: Date.now() }));
       localStorage.setItem("form_data", JSON.stringify(formData));
       setInsufficientError(null);
       router.push("/result");
@@ -178,7 +178,7 @@ export default function Home() {
       }
       if (!res.ok) throw new Error("실시간 검색 후 재생성 실패");
       const data = await res.json();
-      localStorage.setItem("api_result", JSON.stringify(data));
+      localStorage.setItem("api_result", JSON.stringify({ data, savedAt: Date.now() }));
       localStorage.setItem("form_data", JSON.stringify(formData));
       setInsufficientError(null);
       router.push("/result");
