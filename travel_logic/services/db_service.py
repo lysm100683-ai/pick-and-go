@@ -61,10 +61,6 @@ class DBService:
             ])
             keywords.append(f"{city} attractions {random_suffix}")
             
-            # 5. 캐시 데이터 유통기한 정리 (180일 지난 낡은 메모 폐기)
-            # 관리자/사용자가 DB 업데이트를 요청할 때 찌꺼기도 함께 청소합니다.
-            backend.cleanup_old_movement_cache(days=180)
-            
             is_domestic = check_is_domestic(city)
             
             # backend.fetch_all_data 호출

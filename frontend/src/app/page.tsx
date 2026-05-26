@@ -1,7 +1,7 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import { Plane, Calendar, Users, MapPin, Wallet, Compass, Car, Home as HomeIcon, Camera, Utensils, Briefcase, Info, Sparkles } from "lucide-react";
+import { useState } from "react";
+import { Plane, Calendar, Users, MapPin, Wallet, Compass, Car, Home as HomeIcon, Camera, Utensils, Briefcase, Info, Sparkles, AlertTriangle, RefreshCw, Search } from "lucide-react";
 import { format, addDays } from "date-fns";
 import { useRouter } from "next/navigation";
 
@@ -41,7 +41,9 @@ export default function Home() {
     // Advanced (항공/수하물/기타)
     seat_pref: "무관",
     baggage: "기내만",
-    keywords: "",
+    keywords: "", // 특별 액티비티 요구나 추가 설명에 사용
+    
+    // 이하는 고정 또는 기본값
     english_ok: false,
     walk_minutes: 45,
     crowd_avoid: "보통",
@@ -50,30 +52,21 @@ export default function Home() {
     time_constraints: "",
     max_transfers: 1,
     visa_free: false,
-
-    // Step 5: 추가 입력형 조건 (입력형 20개 달성)
-    trip_purpose: "",
-    preferred_airline: "",
-    arrival_time_pref: "",
-    departure_time_pref: "",
-    interest_places: "",
-    daily_budget_manwon: 30,
-    notes: "",
   });
 
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [errorMsg, setErrorMsg]         = useState("");
-  const [genTime, setGenTime]           = useState<string | null>(null);
-  const [elapsed, setElapsed]           = useState(0); // 로딩 중 경과 시간(초)
+  const [errorMsg, setErrorMsg] = useState("");
 
-  // isSubmitting 상태 변화 시 타이머 시작/종료
-  useEffect(() => {
-    if (isSubmitting) {
-      setElapsed(0);
-      const id = setInterval(() => setElapsed(prev => +(prev + 0.1).toFixed(1)), 100);
-      return () => clearInterval(id);
-    }
-  }, [isSubmitting]);
+  // 장소 부족 모달 상태
+  const [insufficientError, setInsufficientError] = useState<{
+    city: string;
+    available: number;
+    required: number;
+    budget_level: string;
+    relaxed: boolean;
+    message: string;
+  } | null>(null);
+  const [modalLoading, setModalLoading] = useState<"relax" | "fetch" | null>(null);
 
   const handleChange = (e: any) => {
     const { name, value, type, checked } = e.target;
@@ -97,52 +90,189 @@ export default function Home() {
     e.preventDefault();
     setIsSubmitting(true);
     setErrorMsg("");
-
-    // AbortController: 120초 타임아웃 (Render cold start 최대 50초 + 처리 시간 고려)
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 120_000);
+    setInsufficientError(null);
     
     try {
-      const res = await fetch("https://pick-and-go-1.onrender.com/api/v1/generate", {
+      const API_BASE = process.env.NEXT_PUBLIC_API_URL || "https://pick-and-go-1.onrender.com";
+      const res = await fetch(`${API_BASE}/api/v1/generate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(formData),
-        signal: controller.signal,
       });
-
-      clearTimeout(timeoutId);
+      
+      if (res.status === 422) {
+        // 장소 부족 에러: 모달 표시
+        const errData = await res.json().catch(() => ({}));
+        if (errData.error_code === "INSUFFICIENT_PLACES") {
+          setInsufficientError(errData);
+          setIsSubmitting(false);
+          return;
+        }
+        throw new Error(errData.detail || `서버 에러 (${res.status})`);
+      }
 
       if (!res.ok) {
         const errData = await res.json().catch(() => ({}));
         throw new Error(errData.detail || `서버 에러 (${res.status})`);
       }
-
+      
       const data = await res.json();
-      // 응답 헤더에서 생성 시간 읽기 (≤5초 목표 사양 검증)
-      const t = res.headers.get("X-Generation-Time");
-      if (t) setGenTime(t);
-
       localStorage.setItem("api_result", JSON.stringify(data));
-      localStorage.setItem("form_data",  JSON.stringify(formData));
-
+      localStorage.setItem("form_data", JSON.stringify(formData));
       router.push("/result");
       
     } catch (err: any) {
-      clearTimeout(timeoutId);
       console.error(err);
-      if (err.name === "AbortError") {
-        setErrorMsg("⏱️ 응답 시간 초과 (120초). 서버가 준비 중일 수 있습니다. 잠시 후 다시 시도해주세요.");
-      } else if (err.message === "Failed to fetch") {
-        setErrorMsg("🔌 서버에 연결할 수 없습니다. 잠시 후 다시 시도해주세요. (서버 깨우는 중일 수 있음)");
-      } else {
-        setErrorMsg(err.message || "일정 생성 중 오류가 발생했습니다.");
-      }
+      setErrorMsg(err.message || "일정 생성 중 오류가 발생했습니다.");
       setIsSubmitting(false);
+    }
+  };
+
+  // 조건 완화하여 재생성
+  const handleRelaxedRetry = async () => {
+    setModalLoading("relax");
+    try {
+      const API_BASE = process.env.NEXT_PUBLIC_API_URL || "https://pick-and-go-1.onrender.com";
+      const res = await fetch(`${API_BASE}/api/v1/generate-relaxed`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(formData),
+      });
+      if (res.status === 422) {
+        const errData = await res.json().catch(() => ({}));
+        if (errData.error_code === "INSUFFICIENT_PLACES") {
+          setInsufficientError(errData);
+          return;
+        }
+      }
+      if (!res.ok) throw new Error("조건 완화 재생성 실패");
+      const data = await res.json();
+      localStorage.setItem("api_result", JSON.stringify(data));
+      localStorage.setItem("form_data", JSON.stringify(formData));
+      setInsufficientError(null);
+      router.push("/result");
+    } catch (err: any) {
+      setErrorMsg(err.message);
+      setInsufficientError(null);
+    } finally {
+      setModalLoading(null);
+    }
+  };
+
+  // 실시간 검색 후 재생성
+  const handleFetchRetry = async () => {
+    setModalLoading("fetch");
+    try {
+      const API_BASE = process.env.NEXT_PUBLIC_API_URL || "https://pick-and-go-1.onrender.com";
+      const res = await fetch(`${API_BASE}/api/v1/generate-fetch`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(formData),
+      });
+      if (res.status === 422) {
+        const errData = await res.json().catch(() => ({}));
+        if (errData.error_code === "INSUFFICIENT_PLACES") {
+          setInsufficientError(errData);
+          return;
+        }
+      }
+      if (!res.ok) throw new Error("실시간 검색 후 재생성 실패");
+      const data = await res.json();
+      localStorage.setItem("api_result", JSON.stringify(data));
+      localStorage.setItem("form_data", JSON.stringify(formData));
+      setInsufficientError(null);
+      router.push("/result");
+    } catch (err: any) {
+      setErrorMsg(err.message);
+      setInsufficientError(null);
+    } finally {
+      setModalLoading(null);
     }
   };
 
   return (
     <div className="min-h-screen bg-sky-50 text-slate-800 font-sans selection:bg-blue-200">
+
+      {/* ─── 장소 부족 모달 ─── */}
+      {insufficientError && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+          <div className="w-full max-w-md bg-white rounded-3xl shadow-2xl p-8 space-y-6">
+            {/* 타이틀 */}
+            <div className="flex items-center gap-3">
+              <div className="flex-shrink-0 w-12 h-12 bg-amber-100 rounded-2xl flex items-center justify-center">
+                <AlertTriangle className="w-6 h-6 text-amber-500" />
+              </div>
+              <div>
+                <h3 className="text-lg font-bold text-slate-800">장소 데이터가 부족합니다</h3>
+                <p className="text-sm text-slate-500 mt-0.5">
+                  {insufficientError.city} · 예산: {insufficientError.budget_level}
+                </p>
+              </div>
+            </div>
+
+            {/* 안내 메시지 */}
+            <p className="text-sm text-slate-600 leading-relaxed bg-amber-50 border border-amber-100 rounded-xl p-4">
+              {insufficientError.message}
+            </p>
+
+            {/* 선택 버튼 */}
+            <div className="space-y-3">
+              {/* 옵션 1: 조건 완화 */}
+              <button
+                id="btn-relax-filter"
+                onClick={handleRelaxedRetry}
+                disabled={insufficientError.relaxed || modalLoading !== null}
+                className={`w-full flex items-center gap-3 px-5 py-4 rounded-2xl font-semibold text-sm transition-all
+                  ${insufficientError.relaxed
+                    ? 'bg-slate-100 text-slate-400 cursor-not-allowed'
+                    : 'bg-blue-600 hover:bg-blue-500 text-white shadow-lg shadow-blue-500/30'}`}
+              >
+                {modalLoading === "relax"
+                  ? <RefreshCw className="w-5 h-5 animate-spin" />
+                  : <RefreshCw className="w-5 h-5" />}
+                <div className="text-left">
+                  <div className="font-bold">
+                    {insufficientError.relaxed ? '이미 조건 완화 시도함' : '평점 기준 완화하여 재생성'}
+                  </div>
+                  {!insufficientError.relaxed && (
+                    <div className="text-xs opacity-80 mt-0.5">
+                      예산 '{insufficientError.budget_level}' 평점 기준을 한 단계 낙춰 더 많은 장소를 포함합니다
+                    </div>
+                  )}
+                </div>
+              </button>
+
+              {/* 옵션 2: 실시간 검색 */}
+              <button
+                id="btn-fetch-live"
+                onClick={handleFetchRetry}
+                disabled={modalLoading !== null}
+                className="w-full flex items-center gap-3 px-5 py-4 bg-emerald-600 hover:bg-emerald-500 text-white rounded-2xl font-semibold text-sm shadow-lg shadow-emerald-500/30 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {modalLoading === "fetch"
+                  ? <Search className="w-5 h-5 animate-pulse" />
+                  : <Search className="w-5 h-5" />}
+                <div className="text-left">
+                  <div className="font-bold">실시간 검색 후 재생성</div>
+                  <div className="text-xs opacity-80 mt-0.5">
+                    Google/Kakao에서 실시간으로 장소를 추가 수집한 후 다시 생성합니다 (약 30초 소요)
+                  </div>
+                </div>
+              </button>
+
+              {/* 취소 */}
+              <button
+                id="btn-cancel-insufficient"
+                onClick={() => setInsufficientError(null)}
+                disabled={modalLoading !== null}
+                className="w-full px-5 py-3 text-slate-500 hover:text-slate-800 text-sm font-medium transition-colors disabled:opacity-50"
+              >
+                취소하고 조건 수정하기
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       {/* 화사한 배경 그라데이션 */}
       <div className="fixed inset-0 -z-10 bg-gradient-to-br from-blue-50 via-white to-sky-100"></div>
       
@@ -394,8 +524,7 @@ export default function Home() {
 
             <div className="mb-8 space-y-2">
               <label className="text-sm font-semibold text-slate-700">알러지 또는 못 드시는 음식 (선택사항)</label>
-              <input type="text" name="food_allergy_text" value={formData.food_allergy_text} onChange={handleChange}
-                maxLength={1000}
+              <input type="text" name="food_allergy_text" value={formData.food_allergy_text} onChange={handleChange} 
                 placeholder="예: 땅콩 알러지, 고수 빼주세요, 갑각류 알러지가 있어요"
                 className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-rose-500 text-slate-700 placeholder-slate-400" />
             </div>
@@ -403,23 +532,29 @@ export default function Home() {
             <div className="p-5 bg-rose-50/50 border border-rose-100 rounded-2xl">
               <label className="text-sm font-bold text-rose-800 mb-4 block">동행자 맞춤 및 특별 시설 요구사항</label>
               <div className="flex flex-wrap gap-4">
-                <label className="flex items-center gap-3 cursor-pointer group bg-white px-4 py-2.5 rounded-xl shadow-sm border border-slate-100 hover:border-rose-200 transition-colors">
+                <label className="flex items-center gap-3 cursor-not-allowed group bg-white/60 px-4 py-2.5 rounded-xl shadow-sm border border-slate-100 opacity-60">
                   <div className="relative flex items-center">
-                    <input type="checkbox" name="barrier_free" checked={formData.barrier_free} onChange={handleChange} className="peer sr-only" />
-                    <div className="w-5 h-5 bg-slate-100 border border-slate-300 rounded transition-colors peer-checked:bg-rose-500 peer-checked:border-rose-500 flex items-center justify-center">
-                      <svg className="w-3.5 h-3.5 text-white opacity-0 peer-checked:opacity-100" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="3"><path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7"></path></svg>
+                    <input type="checkbox" name="barrier_free" checked={false} onChange={() => {}} className="peer sr-only" disabled />
+                    <div className="w-5 h-5 bg-slate-100 border border-slate-300 rounded flex items-center justify-center">
+                      <svg className="w-3.5 h-3.5 text-white opacity-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="3"><path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7"></path></svg>
                     </div>
                   </div>
-                  <span className="text-slate-700 font-medium group-hover:text-rose-600 text-sm">♿ 휠체어 전용 시설 (Barrier Free)</span>
+                  <div className="flex flex-col">
+                    <span className="text-slate-500 font-medium text-sm">♿ 휠체어 전용 시설 (Barrier Free)</span>
+                    <span className="text-xs text-amber-600 font-semibold mt-0.5">⏳ 데이터 연동 준비중 — 현재 지원되지 않습니다</span>
+                  </div>
                 </label>
-                <label className="flex items-center gap-3 cursor-pointer group bg-white px-4 py-2.5 rounded-xl shadow-sm border border-slate-100 hover:border-rose-200 transition-colors">
+                <label className="flex items-center gap-3 cursor-not-allowed group bg-white/60 px-4 py-2.5 rounded-xl shadow-sm border border-slate-100 opacity-60">
                   <div className="relative flex items-center">
-                    <input type="checkbox" name="stroller" checked={formData.stroller} onChange={handleChange} className="peer sr-only" />
-                    <div className="w-5 h-5 bg-slate-100 border border-slate-300 rounded transition-colors peer-checked:bg-orange-500 peer-checked:border-orange-500 flex items-center justify-center">
-                      <svg className="w-3.5 h-3.5 text-white opacity-0 peer-checked:opacity-100" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="3"><path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7"></path></svg>
+                    <input type="checkbox" name="stroller" checked={false} onChange={() => {}} className="peer sr-only" disabled />
+                    <div className="w-5 h-5 bg-slate-100 border border-slate-300 rounded flex items-center justify-center">
+                      <svg className="w-3.5 h-3.5 text-white opacity-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="3"><path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7"></path></svg>
                     </div>
                   </div>
-                  <span className="text-slate-700 font-medium group-hover:text-orange-600 text-sm">🍼 유모차 사용 가능한 평지 위주</span>
+                  <div className="flex flex-col">
+                    <span className="text-slate-500 font-medium text-sm">🍼 유모차 사용 가능한 평지 위주</span>
+                    <span className="text-xs text-amber-600 font-semibold mt-0.5">⏳ 데이터 연동 준비중 — 현재 지원되지 않습니다</span>
+                  </div>
                 </label>
                 <label className="flex items-center gap-3 cursor-pointer group bg-white px-4 py-2.5 rounded-xl shadow-sm border border-slate-100 hover:border-rose-200 transition-colors">
                   <div className="relative flex items-center">
@@ -437,114 +572,28 @@ export default function Home() {
               <label className="text-sm font-semibold text-slate-700 flex items-center gap-2">
                 <Info className="w-4 h-4 text-slate-400" /> 기타 특별하게 원하시는 액티비티나 요구사항을 자유롭게 적어주세요.
               </label>
-              <textarea name="keywords" value={formData.keywords} onChange={handleChange}
-                maxLength={1000}
+              <textarea name="keywords" value={formData.keywords} onChange={handleChange} 
                 rows={3} placeholder="예: 첫날엔 무조건 스쿠버다이빙, 부모님 생신 기념이라 프라이빗 요트 투어를 원해요."
                 className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-rose-500 text-slate-700 placeholder-slate-400 resize-none break-keep" />
             </div>
 
           </section>
 
-          {/* Section 5: Additional Requests */}
-          <section className="bg-white/80 backdrop-blur-xl border border-white rounded-3xl p-6 md:p-8 shadow-xl shadow-slate-200/50">
-            <h2 className="text-2xl font-bold flex items-center gap-3 mb-6 text-slate-800">
-              <Info className="w-6 h-6 text-teal-500" /> 5. 추가 요청 사항
-            </h2>
-            <p className="text-sm text-slate-500 mb-6">입력형 조건 20개 효주 상세 항목입니다. 선택 사항이지만 더 정확한 일정 생성에 도움이 됩니다.</p>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
-              <div className="space-y-2">
-                <label className="text-sm font-semibold text-slate-700">✈️ 여행 목적 / 테마</label>
-                <input type="text" name="trip_purpose"
-                  value={formData.trip_purpose} onChange={handleChange}
-                  placeholder="예) 신혼여행, 가족 추억 여행, 소울리쳐"
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-teal-500 text-slate-700 placeholder-slate-400" />
-              </div>
-              <div className="space-y-2">
-                <label className="text-sm font-semibold text-slate-700">항공기 선호 항공사</label>
-                <input type="text" name="preferred_airline"
-                  value={formData.preferred_airline} onChange={handleChange}
-                  placeholder="예) 대한항공, 아시아나 (없으면 빈칸)"
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-teal-500 text-slate-700 placeholder-slate-400" />
-              </div>
-              <div className="space-y-2">
-                <label className="text-sm font-semibold text-slate-700">🕒 도착 희망 시간대</label>
-                <input type="text" name="arrival_time_pref"
-                  value={formData.arrival_time_pref} onChange={handleChange}
-                  placeholder="예) 오전 10시 이전"
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-teal-500 text-slate-700 placeholder-slate-400" />
-              </div>
-              <div className="space-y-2">
-                <label className="text-sm font-semibold text-slate-700">🕒 출발 희망 시간대</label>
-                <input type="text" name="departure_time_pref"
-                  value={formData.departure_time_pref} onChange={handleChange}
-                  placeholder="예) 오후 3시 이후"
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-teal-500 text-slate-700 placeholder-slate-400" />
-              </div>
-            </div>
-            <div className="space-y-2 mb-6">
-              <label className="text-sm font-semibold text-slate-700">📍 꼭 가보고 싶은 장소 / 명소</label>
-              <input type="text" name="interest_places"
-                value={formData.interest_places} onChange={handleChange}
-                maxLength={500}
-                placeholder="예) 성산일출, 하쏼이 인구여, OO 맛집 거리"
-                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-teal-500 text-slate-700 placeholder-slate-400" />
-            </div>
-            <div className="space-y-2 mb-6">
-              <label className="text-sm font-semibold text-slate-700">💰 하루 자유 예산 (만원, 숙소 제외)</label>
-              <input type="number" name="daily_budget_manwon"
-                value={formData.daily_budget_manwon}
-                onChange={handleChange}
-                min={1} max={500}
-                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-teal-500 text-slate-700" />
-            </div>
-            <div className="space-y-2">
-              <label className="text-sm font-semibold text-slate-700">📝 기타 특이사항 또는 요청사항</label>
-              <textarea name="notes"
-                value={formData.notes} onChange={handleChange}
-                maxLength={1000} rows={3}
-                placeholder="예) 휴스 차항이 있어 무리하지 않은 일정으로 짜주세요"
-                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-teal-500 text-slate-700 placeholder-slate-400 resize-none" />
-            </div>
-          </section>
+          {/* Submit Button */}
           <button type="submit" disabled={isSubmitting}
-            className={`w-full relative group overflow-hidden rounded-2xl p-1 transition-all transform hover:-translate-y-1 ${
-              isSubmitting
-                ? elapsed > 5
-                  ? "bg-orange-500 hover:shadow-2xl hover:shadow-orange-500/40"
-                  : "bg-blue-600 hover:shadow-2xl hover:shadow-blue-500/40"
-                : "bg-blue-600 hover:shadow-2xl hover:shadow-blue-500/40"
-            }`}>
+            className="w-full relative group overflow-hidden rounded-2xl bg-blue-600 p-1 transition-all hover:shadow-2xl hover:shadow-blue-500/40 transform hover:-translate-y-1">
             <div className="relative px-8 py-5 bg-white/10 backdrop-blur-sm rounded-[12px] flex items-center justify-center gap-3">
               {isSubmitting ? (
-                <>
-                  <div className="w-6 h-6 border-3 border-white/30 border-t-white rounded-full animate-spin" />
-                  <span className="text-xl font-bold text-white tracking-wide">
-                    AI 일정 생성 중...
-                  </span>
-                  {/* 실시간 경과 시간 */}
-                  <span className={`text-lg font-black tabular-nums ${
-                    elapsed > 5 ? "text-orange-200" : "text-white/80"
-                  }`}>
-                    {elapsed.toFixed(1)}s
-                    {elapsed > 5 && <span className="ml-1 text-sm">⚠️</span>}
-                  </span>
-                </>
+                <div className="w-6 h-6 border-3 border-white/30 border-t-white rounded-full animate-spin"></div>
               ) : (
-                <>
-                  <Plane className="w-6 h-6 text-white group-hover:translate-x-1 group-hover:-translate-y-1 transition-transform" />
-                  <span className="text-xl font-bold text-white tracking-wide">완벽한 여행 일정 만들기</span>
-                </>
+                <Plane className="w-6 h-6 text-white group-hover:translate-x-1 group-hover:-translate-y-1 transition-transform" />
               )}
+              <span className="text-xl font-bold text-white tracking-wide">
+                {isSubmitting ? "AI가 맞춤 여행 일정을 생성하고 있습니다..." : "완벽한 여행 일정 만들기"}
+              </span>
             </div>
           </button>
           
-          {genTime && (
-            <div className="flex items-center justify-center gap-2 text-sm text-emerald-700 font-semibold bg-emerald-50 border border-emerald-200 rounded-xl p-3">
-              <span>✅ 일정 생성 완료 — 소요 시간: <strong>{genTime}</strong></span>
-              <span className="text-emerald-500">{parseFloat(genTime) <= 5 ? "(목표 ≤5초 충족 ✓)" : "(목표 ≤5초 초과 ⚠️)"}</span>
-            </div>
-          )}
-
           {errorMsg && (
             <div className="text-center text-red-500 font-medium p-3 bg-red-50 rounded-xl border border-red-200">
               {errorMsg}

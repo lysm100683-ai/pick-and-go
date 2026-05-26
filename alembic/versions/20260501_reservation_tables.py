@@ -23,7 +23,7 @@ from sqlalchemy.dialects.postgresql import JSONB, UUID
 
 
 revision: str = 'a1b2c3d4e5f6'
-down_revision: Union[str, None] = '20260403_1435'   # verify_guardrail 다음
+down_revision: Union[str, None] = 'db4c64e8931c'   # verify_guardrail 다음
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

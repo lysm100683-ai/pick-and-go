@@ -34,7 +34,6 @@ class TravelCondition(BaseModel):
     
     # 음식 및 편의
     food_prefs: List[str] = []
-    food_allergy_text: str = ""
     with_kids: bool = False
     stroller: bool = False
     barrier_free: bool = False
@@ -103,7 +102,21 @@ class ItineraryResponse(BaseModel):
 
 
 # ----------------------------------------------------------------
-# 3. 예약부 모델 (Reservation Models)
+# 3. 장소 부족 에러 응답 모델 [yeongmin]
+# ----------------------------------------------------------------
+
+class InsufficientPlacesDetail(BaseModel):
+    """장소 부족 시 422 응답 구조 (프론트엔드 모달 안내용)"""
+    city: str
+    available: int
+    required: int
+    budget_level: str
+    relaxed: bool = False
+    message: str
+
+
+# ----------------------------------------------------------------
+# 4. 예약부 모델 (Reservation Models)
 # ----------------------------------------------------------------
 
 class PaymentInfo(BaseModel):
