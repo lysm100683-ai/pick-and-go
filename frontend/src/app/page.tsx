@@ -325,14 +325,17 @@ export default function Home() {
                 <label className="text-sm font-semibold text-slate-700 flex items-center gap-2">
                   <Calendar className="w-4 h-4 text-blue-500" /> 출발일
                 </label>
-                <input type="date" name="start_date" value={formData.start_date} onChange={handleChange} 
+                {/* [M-8] min=today: 과거 날짜 선택 자체를 UI에서 막음 */}
+                <input type="date" name="start_date" value={formData.start_date} onChange={handleChange}
+                  min={format(new Date(), "yyyy-MM-dd")}
                   className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-blue-500 text-slate-700 font-medium" />
               </div>
               <div className="space-y-2">
                 <label className="text-sm font-semibold text-slate-700 flex items-center gap-2">
                   <Calendar className="w-4 h-4 text-blue-500" /> 종료일
                 </label>
-                <input type="date" name="end_date" value={formData.end_date} onChange={handleChange} 
+                <input type="date" name="end_date" value={formData.end_date} onChange={handleChange}
+                  min={formData.start_date || format(new Date(), "yyyy-MM-dd")}
                   className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-blue-500 text-slate-700 font-medium" />
               </div>
 

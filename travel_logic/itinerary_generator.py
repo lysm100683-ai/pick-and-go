@@ -688,17 +688,22 @@ class ItineraryGenerator:
             최종 테마 점수 (int, 60~99)
         """
         # 1. 장소 raw_score 수집 (숙소·공항 제외)
-        raw_scores = [
-            place['raw_score']
-            for day in days
-            for place in day.get('places', [])
-            if place.get('raw_score') and place.get('type_key') not in ('숙소',)
-        ]
+        # [L-2] 전체 평균 대신 '일자별 평균의 평균' 사용
+        #       → 장소 수 편차가 큰 날도 동등 가중 (1일 5곳 vs 3일 1곳 불균형 보정)
+        daily_avgs = []
+        for day in days:
+            day_scores = [
+                place['raw_score']
+                for place in day.get('places', [])
+                if place.get('raw_score') and place.get('type_key') not in ('숙소',)
+            ]
+            if day_scores:
+                daily_avgs.append(sum(day_scores) / len(day_scores))
 
-        if not raw_scores:
+        if not daily_avgs:
             return 85  # 데이터 없을 때 기본값
 
-        base_score = sum(raw_scores) / len(raw_scores)
+        base_score = sum(daily_avgs) / len(daily_avgs)
 
         # 2. 취향-테마 일치 보정
         styles = set(user_data.get('style', []))

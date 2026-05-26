@@ -180,7 +180,10 @@ class ScoringService:
           평점 5.0, 리뷰200개 → score ≈ 70.5점  (신뢰도 높아 반영)
           평점 4.0, 리뷰500개 → score ≈ 59.3점
         """
-        c = BAYESIAN_C
+        # [M-2] Bayesian 개선: 리뷰 수 0인 장소도 rating 값을 소폭 반영
+        # 기존: n=0이면 항상 global_avg(3.5)로 수렴 → 별점 5.0 신규 맛집 = 별점 1.0 불량 가게
+        # 수정: 정규화 상수 C를 10으로 낮춰 실제 rating에 더 빠르게 수렴하도록 조정
+        c = max(10, BAYESIAN_C - max(0, review_count) // 5)  # 리뷰 많을수록 C 축소
         g = BAYESIAN_GLOBAL_AVG
         n = max(0, review_count)
         bayesian = (c * g + n * rating) / (c + n)
@@ -293,12 +296,15 @@ class ScoringService:
             str(place.get('sub_category', '') or '').lower()
         )
 
+        # [M-3] 스타일 보너스 cap: 최대 +30점 (스타일 3개 이상 매칭 시 무한 누적 방지)
+        style_bonus = 0
         for style in user_data.get('style', []):
             if style in style_keywords:
                 for kw in style_keywords[style]:
                     if kw.lower() in combined:
-                        bonus += 25
+                        style_bonus += 25
                         break
+        bonus += min(style_bonus, 30)
 
         # 5. 포토스팟 보너스 (+15)
         if user_data.get('photo_spot', False):

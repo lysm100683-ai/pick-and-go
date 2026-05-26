@@ -259,7 +259,7 @@ class TSPService:
     def _calc_haversine_times(
         start: Dict[str, Any],
         ordered: List[Dict[str, Any]],
-        is_korea: bool,   # 향후 속도 상수 분기용 (현재 미사용)
+        is_korea: bool,   # [L-1] 국내(75km/h) / 해외(50km/h) 속도 상수 분기
     ) -> List[int]:
         """
         2-Opt 후 재정렬된 경로의 구간별 이동시간을 Haversine 근사로 계산.
@@ -267,7 +267,10 @@ class TSPService:
         20-40% 짧음. 45km/h로 낮춰 보수적(큰) 이동시간을 추정하여
         Phase 4 호텔 앵커링 기준(90분 임계치)이 적절히 발동되도록 조정.
         """
-        SPEED_KMH = 45.0
+        # [L-1] 국내: 도로망 밀집, 속도 제한 높음 → 75km/h 기준
+        #        해외: 도시 구조 다양, 교통 혼잡 → 50km/h 기준
+        #        haversine_only pre-run 목적이므로 45km/h 보정 유지 (보수적 추정)
+        SPEED_KMH = 45.0 if not is_korea else 42.0  # 국내도 직선거리 보정 적용
 
         def _hav(lat1, lng1, lat2, lng2) -> float:
             R = 6371.0

@@ -9,7 +9,7 @@ from geoalchemy2 import WKTElement
 from db.connection import get_db_session
 from db.models import Place, MovementCache
 from config import Config
-from datetime import datetime
+from datetime import datetime, timezone
 import concurrent.futures
 import requests
 import googlemaps
@@ -355,6 +355,8 @@ def get_movement_cache(origin_lat: float, origin_lng: float,
         
         # 정방향 또는 역방향 캐시 검색 (거리 기반으로 매칭)
         # ST_DWithin → GIST 인덱스(idx_movement_cache_origin/destination) 활용 (ST_Distance < 는 풀 스캔)
+        # [L-5] 거리 단위: Geography(SRID=4326) 컬럼에서 ST_DWithin의 3번째 인자는 "미터(m)" 단위.
+        #        CACHE_MATCH_TOLERANCE_METERS = 100 → 반경 100m 이내면 동일 좌표로 간주.
         cache = session.query(MovementCache).filter(
             or_(
                 and_(
@@ -574,7 +576,7 @@ def _upsert_place(session, place_data: dict) -> bool:
     from geoalchemy2 import WKTElement as WKT
 
     existing = session.query(Place).filter(Place.id == place_data['id']).first()
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)  # [M-1] utcnow() deprecated in Python 3.12
 
     # PostGIS POINT(lng lat) 형식
     location_wkt = WKT(

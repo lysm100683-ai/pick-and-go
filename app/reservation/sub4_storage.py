@@ -98,10 +98,10 @@ async def save_reservation(confirmed_reservation: dict) -> str:
         # DB 오류: 트랜잭션은 with 블록 종료 시 자동 롤백됨
         # 실패 로그는 트랜잭션 외부에서 별도 저장 시도
         await _save_failure_log(res_uuid, str(e))
-        raise StorageError(
+        raise StorageError(              # [M-5] from e: 원본 traceback 보존
             "DB_SAVE_FAILED",
             f"예약 정보 저장 중 오류 발생: {str(e)}"
-        )
+        ) from e
 
 
 async def _save_failure_log(reservation_id: uuid.UUID, error_msg: str) -> None:

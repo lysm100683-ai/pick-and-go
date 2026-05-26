@@ -285,28 +285,44 @@ def _duffel_headers() -> dict:
     }
 
 
-def _duffel_post(path: str, body: dict) -> dict:
-    """Duffel POST 요청 공통 처리."""
-    r = _requests.post(
-        f"{DUFFEL_API_BASE}{path}",
-        headers=_duffel_headers(),
-        json={"data": body},
-        timeout=30,
-    )
-    r.raise_for_status()
-    return r.json()["data"]
+def _duffel_post(path: str, body: dict, _retry: int = 1) -> dict:
+    """Duffel POST 요청 공통 처리. [M-6] retry 1회 + 명시적 10초 timeout."""
+    last_exc = None
+    for attempt in range(_retry + 1):
+        try:
+            r = _requests.post(
+                f"{DUFFEL_API_BASE}{path}",
+                headers=_duffel_headers(),
+                json={"data": body},
+                timeout=10,
+            )
+            r.raise_for_status()
+            return r.json()["data"]
+        except Exception as exc:
+            last_exc = exc
+            if attempt < _retry:
+                import time; time.sleep(1)
+    raise last_exc
 
 
-def _duffel_get(path: str, params: dict = None) -> dict:
-    """Duffel GET 요청 공통 처리."""
-    r = _requests.get(
-        f"{DUFFEL_API_BASE}{path}",
-        headers=_duffel_headers(),
-        params=params,
-        timeout=30,
-    )
-    r.raise_for_status()
-    return r.json()
+def _duffel_get(path: str, params: dict = None, _retry: int = 1) -> dict:
+    """Duffel GET 요청 공통 처리. [M-6] retry 1회 + 명시적 10초 timeout."""
+    last_exc = None
+    for attempt in range(_retry + 1):
+        try:
+            r = _requests.get(
+                f"{DUFFEL_API_BASE}{path}",
+                headers=_duffel_headers(),
+                params=params,
+                timeout=10,
+            )
+            r.raise_for_status()
+            return r.json()
+        except Exception as exc:
+            last_exc = exc
+            if attempt < _retry:
+                import time; time.sleep(1)
+    raise last_exc
 
 
 def _duffel_book_flight_sync(context: dict) -> dict:
@@ -443,7 +459,7 @@ async def _real_book_flight(context: dict) -> dict:
 # auth: X-API-Key 헤더 (Bearer 아님)
 
 LITEAPI_BASE    = "https://api.liteapi.travel/v3.0"
-LITEAPI_TIMEOUT = 30
+LITEAPI_TIMEOUT = 10  # [M-6] 30→10초 timeout (과도한 대기 방지)
 
 
 def _liteapi_headers() -> dict:
@@ -458,16 +474,24 @@ def _liteapi_headers() -> dict:
     }
 
 
-def _liteapi_post(path: str, body: dict) -> dict:
-    """LiteAPI POST 요청 공통 처리."""
-    r = _requests.post(
-        f"{LITEAPI_BASE}{path}",
-        headers=_liteapi_headers(),
-        json=body,
-        timeout=LITEAPI_TIMEOUT,
-    )
-    r.raise_for_status()
-    return r.json()
+def _liteapi_post(path: str, body: dict, _retry: int = 1) -> dict:
+    """LiteAPI POST 요청 공통 처리. [M-6] retry 1회 + 10초 timeout."""
+    last_exc = None
+    for attempt in range(_retry + 1):
+        try:
+            r = _requests.post(
+                f"{LITEAPI_BASE}{path}",
+                headers=_liteapi_headers(),
+                json=body,
+                timeout=LITEAPI_TIMEOUT,
+            )
+            r.raise_for_status()
+            return r.json()
+        except Exception as exc:
+            last_exc = exc
+            if attempt < _retry:
+                import time; time.sleep(1)
+    raise last_exc
 
 
 def _liteapi_book_hotel_sync(context: dict) -> dict:

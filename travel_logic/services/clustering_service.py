@@ -345,15 +345,23 @@ class ClusteringService:
         clusters = ClusteringService._timebox_check(clusters)
 
         # ④ centroid 재계산: 실제 장소 좌표 평균
+        # [M-4] 빈 클러스터는 (0.0, 0.0) 대신 인접 유효 클러스터 centroid 사용
+        #       → TSP start_point가 (0,0)이 되어 Haversine greedy 폴백되는 문제 방지
         recomputed_centroids: List[Tuple[float, float]] = []
         for i, group in enumerate(clusters):
             if group:
                 avg_lat = sum(p['lat'] for p in group) / len(group)
                 avg_lng = sum(p['lng'] for p in group) / len(group)
                 recomputed_centroids.append((avg_lat, avg_lng))
-            else:
-                # 그룹이 여전히 비어있으면 원래 centroid 유지
+            elif centroids[i] != (0.0, 0.0):
                 recomputed_centroids.append(centroids[i])
+            else:
+                # (0,0) centroid이거나 원본도 없으면 유효한 다른 centroid 중 첫 번째 사용
+                fallback = next(
+                    (c for j, c in enumerate(centroids) if j != i and c != (0.0, 0.0)),
+                    centroids[i]
+                )
+                recomputed_centroids.append(fallback)
 
         return clusters, recomputed_centroids
 

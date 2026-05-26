@@ -106,7 +106,9 @@ def _get_stats_sync(period_days: int = 7) -> dict:
     success_count = sum(1 for r in rows if r.action_type == "success" and r.result == "ok")
     failure_count = sum(1 for r in rows if r.action_type == "failure" and r.result == "error")
 
-    denominator = success_count + failure_count
+    # [L-6] 분모를 attempt_count로 변경: SRS M-13 기준은 "전체 시도 대비 성공률"
+    #        기존 success+failure만 분모로 쓰면 attempt 후 응답 없는 케이스가 누락됨
+    denominator = attempt_count if attempt_count > 0 else (success_count + failure_count)
     success_rate = (success_count / denominator * 100) if denominator > 0 else None
 
     return {

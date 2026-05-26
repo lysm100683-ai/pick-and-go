@@ -338,9 +338,24 @@ export default function ResultPage() {
       clearTimeout(timer4);
 
       const resultData = await res.json();
-      
+
       if (!res.ok || resultData.status === "failed") {
-        throw new Error(resultData.error_message || resultData.detail || "예약에 실패했습니다.");
+        // [H-5] 에러 코드 → 사용자 친화적 한국어 메시지 매핑
+        const ERROR_MESSAGES: Record<string, string> = {
+          PAST_DATE:             "출발일이 오늘 이전입니다. 날짜를 다시 선택해 주세요.",
+          INVALID_DATE_RANGE:    "종료일이 시작일보다 빠르거나 같습니다.",
+          INVALID_DATE_FORMAT:   "날짜 형식이 올바르지 않습니다. (YYYY-MM-DD)",
+          MISSING_USER_ID:       "사용자 정보가 없습니다. 페이지를 새로고침해 주세요.",
+          MISSING_TRIP_DATA:     "일정 데이터가 없습니다. 일정을 다시 생성해 주세요.",
+          MISSING_CITY:          "출발지 또는 여행지 정보가 없습니다.",
+          INVALID_PEOPLE_COUNT:  "인원 수가 허용 범위(1~8명)를 벗어났습니다.",
+          DUPLICATE_RESERVATION: "동일한 날짜에 이미 예약된 일정이 있습니다.",
+          BOOKING_FAILED:        "항공 또는 숙소 예약 중 오류가 발생했습니다. 다시 시도해 주세요.",
+          EXTERNAL_API_ERROR:    "외부 예약 서비스 연결에 실패했습니다. 잠시 후 다시 시도해 주세요.",
+        };
+        const code = resultData.error_code as string;
+        const friendlyMsg = ERROR_MESSAGES[code] || resultData.error_message || resultData.detail || "예약에 실패했습니다.";
+        throw new Error(friendlyMsg);
       }
 
       setCurrentSubStep(5);
@@ -483,9 +498,11 @@ export default function ResultPage() {
                   >
                     창 닫기
                   </button>
-                  <button 
+                  {/* [M-7] isProcessing 동안 disabled → 이중 클릭 방어 */}
+                  <button
                     onClick={handleConfirmReservation}
-                    className="flex-1 py-3 text-sm font-black text-white bg-blue-600 hover:bg-blue-500 rounded-xl transition-colors shadow-lg shadow-blue-500/20"
+                    disabled={isProcessing}
+                    className={`flex-1 py-3 text-sm font-black text-white rounded-xl transition-colors shadow-lg shadow-blue-500/20 ${isProcessing ? 'bg-blue-300 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-500'}`}
                   >
                     💳 결제 및 예약 확정
                   </button>
