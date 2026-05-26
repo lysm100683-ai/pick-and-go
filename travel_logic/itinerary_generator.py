@@ -953,16 +953,29 @@ class ItineraryGenerator:
             staleness_warning = 'none'
 
         # ── 상세보기 URL 결정 ──────────────────────────────────────────
-        # Kakao: img_url = place.map.kakao.com/... (상세 페이지) → 그대로 사용
-        # Google: img_url = maps.googleapis.com/maps/api/place/photo?... (사진 URL)
-        #         → 브라우저에서 직접 열면 400 에러. Google Maps 좌표 URL로 대체.
+        # source 필드 우선으로 판별 (img_url 내용보다 신뢰도 높음)
+        #   kakao → img_url이 place.map.kakao.com이면 그대로 사용
+        #           비어 있거나 kakao 도메인 아니면 → Kakao 장소 검색 URL 생성
+        #   google → img_url은 사진 API URL(브라우저 직접 열면 400) → Google Maps 좌표 URL
+        #   기타   → img_url 그대로 (폴백)
         raw_img_url = db_row.get('img_url', '') or ''
-        if 'maps.googleapis.com/maps/api/place/photo' in raw_img_url:
-            _lat = db_row.get('lat', 0.0)
-            _lng = db_row.get('lng', 0.0)
+        _lat        = db_row.get('lat', 0.0)
+        _lng        = db_row.get('lng', 0.0)
+        _source     = db_row.get('source', '')
+
+        if _source == 'kakao':
+            if 'place.map.kakao.com' in raw_img_url:
+                # Kakao place_url이 img_url에 그대로 저장된 경우
+                place_detail_url = raw_img_url
+            else:
+                # img_url이 비어 있거나 썸네일 URL인 경우 → Kakao 장소명 검색
+                _encoded_name = place_name.replace(' ', '+')
+                place_detail_url = f"https://map.kakao.com/link/search/{_encoded_name}"
+        elif _source == 'google' or 'maps.googleapis.com' in raw_img_url:
+            # Google 소스: 사진 URL은 브라우저에서 열 수 없으므로 좌표 기반 URL 생성
             place_detail_url = f"https://www.google.com/maps/search/?api=1&query={_lat},{_lng}"
         else:
-            # Kakao place_url 또는 기타 소스의 URL을 그대로 사용
+            # 기타 소스: img_url 그대로 사용 (비어 있으면 프론트 폴백으로 처리)
             place_detail_url = raw_img_url
 
         return {
