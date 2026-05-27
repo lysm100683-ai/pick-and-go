@@ -51,30 +51,24 @@ class OptimizationService:
         
         # 현재 위치가 유효한 경우에만 최적화 시도
         if current_place and current_place.get('lat', 0.0) != 0.0 and current_place.get('lng', 0.0) != 0.0:
-            # [BUG-8 fix] in-place sort 대신 sorted()를 사용하여 원본 리스트 보호
-            candidates_sorted_by_dist = sorted(
-                candidates,
-                key=lambda p: self.distance_service.haversine_distance(
-                    current_place['lat'], current_place['lng'], p['lat'], p['lng']
-                )
-            )
-            top_candidates = candidates_sorted_by_dist[:10]
-            
-            # 실제 이동시간 조회 (병렬, 캐시 우선)
-            results = self.distance_service.get_travel_times_bulk(
-                current_place['lat'], current_place['lng'], 
-                top_candidates, is_korea, mode
-            )
-            
-            # Cost 계산
+            # [성능 최적화] get_travel_times_bulk() API 호출 제거
+            # Haversine 직선거리 기반 이동시간 근사 (40km/h 가정) → API 호출 0회
+            # 근거: 카페·식사 후보는 근거리(수백m) 선택이 목적 → Haversine으로 충분
+            SPEED_KMH = 40.0  # 시내 주행 평균 속도 가정
+
             final_costs = []
-            for travel_time, place in results:
+            for place in candidates:
+                km = self.distance_service.haversine_distance(
+                    current_place['lat'], current_place['lng'],
+                    place.get('lat', 0.0), place.get('lng', 0.0),
+                )
+                travel_time_sec = int(km / SPEED_KMH * 3600)
                 cost = self._calculate_cost(
-                    travel_time, place, strategy_weights, place_type
+                    travel_time_sec, place, strategy_weights, place_type
                 )
                 final_costs.append((cost, place))
             
-            # Cost가 가장 낮은 장소 선택
+            # Cost가 가장 낙은 장소 선택
             final_costs.sort(key=lambda x: x[0])
             if final_costs:
                 selected = final_costs[0][1]

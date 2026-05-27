@@ -71,7 +71,7 @@ class TSPService:
         is_korea: bool,
         travel_mode: str,
         end_point: Optional[Dict[str, Any]] = None,   # ③ Round-trip 복귀지
-        haversine_only: bool = False,                  # ④ True면 실제 API 호출 없이 Haversine만 사용
+        haversine_only: bool = True,                   # ④ True면 실제 API 호출 없이 Haversine만 사용 [성능 최적화: 기본값 True]
     ) -> Tuple[List[Dict[str, Any]], List[int], int]:
         """
         Nearest Neighbor + 2-Opt 알고리즘으로 하루 방문 순서를 최적화한다.
@@ -123,11 +123,12 @@ class TSPService:
             )
             top_candidates = candidates_sorted[:top_n]
 
+            # [성능 최적화] haversine_only=True(기본값)이면 API 호출 없이 Haversine 직선거리로 바로 선택
+            # 근거: TSP 방문 순서 결정에 실도로 API 불필요, 2-Opt도 Haversine 기반
             if haversine_only:
-                # Haversine 최단 거리 장소를 바로 선택 (API 호출 없음)
                 best_place = top_candidates[0]
             else:
-                # bulk 실제 이동시간 조회 (캐시 → API)
+                # bulk 실제 이동시간 조회 (캐시 → API) — haversine_only=False일 때만
                 results = self.distance_service.get_travel_times_bulk(
                     current.get('lat', 0.0), current.get('lng', 0.0),
                     top_candidates, is_korea, travel_mode,

@@ -18,7 +18,14 @@ import backend_postgres as backend  # DB부: backend_postgres 사용 (PostGIS �
 
 class DistanceService:
     """거리 계산 및 이동시간 조회 담당"""
-    
+
+    def __init__(self):
+        # [성능 최적화] 인메모리 이동시간 캐시
+        # - DB 캐시(PostGIS) 조회 전에 먼저 확인 → DB 왕복 없이 즉시 반환
+        # - 4개 테마가 같은 좌표쌍을 반복 조회할 때 특히 효과적
+        # - 소수점 4자리 반올림: 약 11m 오차 이내 → 실용상 동일 구간으로 처리
+        self._time_cache: dict = {}
+
     @staticmethod
     def haversine_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
         """
@@ -51,24 +58,35 @@ class DistanceService:
         
         return distance
     
-    @staticmethod
-    def get_travel_time(origin_lat: float, origin_lng: float, 
+    def get_travel_time(self, origin_lat: float, origin_lng: float, 
                        dest_lat: float, dest_lng: float,
                        is_korea: bool, mode: str = 'driving') -> int:
         """
         두 지점 간 이동시간 조회 (초 단위)
+
+        [성능 최적화] 인메모리 캐시를 먼저 확인하여 DB·API 왕복 최소화.
+        캐시 키는 소수점 4자리 반올림(약 11m 오차 허용)으로 부동소수점 미스매치 방지.
         
         Args:
             origin_lat, origin_lng: 출발지 좌표
-            dest_lat, dest_lng: 도착지 좌표
+            dest_lat, dest_lng: 목적지 좌표
             is_korea: 국내 여행 여부
             mode: 이동 수단 ('driving' 또는 'transit')
             
         Returns:
             이동시간 (초)
         """
+        # 인메모리 캐시 키 (소수점 4자리 반올림으로 부동소수점 오차 제거)
+        cache_key = (
+            round(origin_lat, 4), round(origin_lng, 4),
+            round(dest_lat, 4),   round(dest_lng, 4),
+            mode,
+        )
+        if cache_key in self._time_cache:
+            return self._time_cache[cache_key]
+
         if is_korea:
-            return backend.get_real_duration_kakao(
+            result = backend.get_real_duration_kakao(
                 origin_lat, origin_lng, dest_lat, dest_lng, mode=mode
             )
         else:
@@ -77,7 +95,13 @@ class DistanceService:
                 [{'lat': dest_lat, 'lng': dest_lng}], 
                 mode=mode
             )
-            return results[0][0] if results else 999999
+            result = results[0][0] if results else 999999
+
+        # 인메모리 캐시 저장 (999999 오류값은 캐싱 제외 — 재시도 허용)
+        if result != 999999:
+            self._time_cache[cache_key] = result
+
+        return result
     
     @staticmethod
     def get_travel_times_bulk(origin_lat: float, origin_lng: float,
