@@ -6,6 +6,7 @@
 import random
 import sys
 import os
+import urllib.parse
 from datetime import date, timedelta, datetime, time
 from typing import List, Dict, Any, Optional
 
@@ -19,7 +20,7 @@ import backend_postgres as backend  # DB부: backend_postgres 사용 (PostGIS �
 
 from .config import VISIT_TIMES, LUNCH_START_RANGE, DINNER_START_RANGE
 from .config.constants import (
-    HOTEL_CATEGORIES, CANDIDATE_POOL_RATIO, AIRPORT_COORDS,
+    HOTEL_CATEGORIES, CAMPING_KEYWORDS, CANDIDATE_POOL_RATIO, AIRPORT_COORDS,
     PLACE_STALE_WARNING_DAYS, PLACE_STALE_HIGH_RISK_DAYS,
     # Phase 5: 타임박싱 상수
     PACE_MAX_PLACES, COMPANION_STAY_MULTIPLIER,
@@ -284,11 +285,18 @@ class ItineraryGenerator:
 
         # ── [Phase 1] 숙소 별도 풀: HOTEL_CATEGORIES 상수 기반 + star_rating 조건 ──
         min_hotel_rating = float(user_data.get('star_rating', 3))
+        user_styles = [s.lower() for s in user_data.get('style', [])]
+        wants_camping = any("캠핑" in s or "camping" in s for s in user_styles)
         hotels = [
             p for p in places
             if (
                 any(kw in str(p.get('category', '')) for kw in HOTEL_CATEGORIES)
                 and float(p.get('rating', 0)) >= min_hotel_rating
+                # 캠핑 스타일 미선택 시 캠핑장 숙소 제외
+                and (wants_camping or not any(
+                    kw in (str(p.get('name', '')) + str(p.get('category', ''))).lower()
+                    for kw in CAMPING_KEYWORDS
+                ))
             )
         ]
 
@@ -963,19 +971,17 @@ class ItineraryGenerator:
         _lng        = db_row.get('lng', 0.0)
         _source     = db_row.get('source', '')
 
+        _encoded_name = urllib.parse.quote(place_name)
         if _source == 'kakao':
             if 'place.map.kakao.com' in raw_img_url:
-                # Kakao place_url이 img_url에 그대로 저장된 경우
                 place_detail_url = raw_img_url
             else:
-                # img_url이 비어 있거나 썸네일 URL인 경우 → Kakao 장소명 검색
-                _encoded_name = place_name.replace(' ', '+')
+                # img_url 없거나 썸네일 → Kakao 장소명 검색 (특수문자 안전 인코딩)
                 place_detail_url = f"https://map.kakao.com/link/search/{_encoded_name}"
         elif _source == 'google' or 'maps.googleapis.com' in raw_img_url:
-            # Google 소스: 사진 URL은 브라우저에서 열 수 없으므로 좌표 기반 URL 생성
-            place_detail_url = f"https://www.google.com/maps/search/?api=1&query={_lat},{_lng}"
+            # 장소명 포함 URL → Google이 해당 위치의 실제 장소 정보 표시
+            place_detail_url = f"https://www.google.com/maps/search/{_encoded_name}/@{_lat},{_lng},17z"
         else:
-            # 기타 소스: img_url 그대로 사용 (비어 있으면 프론트 폴백으로 처리)
             place_detail_url = raw_img_url
 
         return {

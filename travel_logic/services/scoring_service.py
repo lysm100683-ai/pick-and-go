@@ -17,6 +17,7 @@ from ..config.constants import (
     BUDGET_MIN_RATING,
     CANDIDATE_POOL_RATIO,
     HOTEL_CATEGORIES,             # hard_filter() is_hotel 판별에 사용
+    PLACE_NAME_BLACKLIST,         # hard_filter() 기관·안내소 블랙리스트
     REVIEW_COUNT_BONUS,           # 레거시 (하위 호환용)
     BAYESIAN_C,
     BAYESIAN_GLOBAL_AVG,
@@ -91,7 +92,12 @@ class ScoringService:
             if not is_kakao_no_rating and rating < effective_min:
                 continue
 
-            # 조건 3: 배리어프리 (현재 미작동)
+            # 조건 3: 장소명 블랙리스트 (관광협회·안내센터·공공기관 등 여행지 부적합)
+            name_lower = str(p.get('name', '')).lower()
+            if any(kw in name_lower for kw in PLACE_NAME_BLACKLIST):
+                continue
+
+            # 조건 4: 배리어프리 (현재 미작동)
             if user_data.get('stroller', False) or user_data.get('barrier_free', False):
                 pass  # TODO: TourAPI 연동 후 활성화
 

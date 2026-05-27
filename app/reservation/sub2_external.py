@@ -24,9 +24,9 @@ from typing import List, Dict, Any
 MOCK_FLIGHT = os.getenv("MOCK_FLIGHT", "true").lower() == "true"
 MOCK_HOTEL  = os.getenv("MOCK_HOTEL",  "true").lower() == "true"
 
-# Mock 성공률 (테스트용 — 환경변수로 조정 가능)
-MOCK_FLIGHT_SUCCESS_RATE = float(os.getenv("MOCK_FLIGHT_SUCCESS_RATE", "0.95"))
-MOCK_HOTEL_SUCCESS_RATE  = float(os.getenv("MOCK_HOTEL_SUCCESS_RATE",  "0.95"))
+# Mock 성공률 (환경변수로 조정 가능 — 실패 시뮬레이션: 0.95, 항상 성공: 1.0)
+MOCK_FLIGHT_SUCCESS_RATE = float(os.getenv("MOCK_FLIGHT_SUCCESS_RATE", "1.0"))
+MOCK_HOTEL_SUCCESS_RATE  = float(os.getenv("MOCK_HOTEL_SUCCESS_RATE",  "1.0"))
 
 # 파트너사 API 응답 대기 타임아웃 (초) — 초과 시 실패로 처리 후 Saga 롤백 발동
 BOOKING_TIMEOUT_SEC = float(os.getenv("BOOKING_TIMEOUT_SEC", "10.0"))

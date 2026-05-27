@@ -58,6 +58,21 @@ HOTEL_CATEGORIES = {
     "lodging", "hotel", "resort", "guesthouse", "motel",
 }
 
+# ─── Phase 1: 캠핑 관련 키워드 (style에 캠핑 없으면 숙소 풀에서 제외) ──
+CAMPING_KEYWORDS = {
+    "캠핑", "camping", "글램핑", "glamping", "오토캠핑",
+    "caravan", "캐라반", "캠프", "camp site",
+}
+
+# ─── Phase 1: 장소명 블랙리스트 (기관·안내소·공공시설 등 여행지 부적합) ──
+PLACE_NAME_BLACKLIST = {
+    "관광협회", "관광안내소", "관광안내센터", "관광안내", "관광안내소",
+    "여행안내소", "여행안내센터", "tourist information", "tourism bureau",
+    "tourist office", "관광공사", "관광진흥", "관광청", "tour center",
+    "주민센터", "동사무소", "구청", "시청", "군청", "읍사무소", "면사무소",
+    "환전소", "외환은행", "항공사 카운터",
+}
+
 # ─── Phase 1: 예산 수준별 하드필터 최소 평점 ──────────────
 BUDGET_MIN_RATING = {
     "저": 2.0,

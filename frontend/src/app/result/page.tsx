@@ -242,26 +242,38 @@ export default function ResultPage() {
   const handleRegenerate = async () => {
     if (!userData) return;
     setIsRegenerating(true);
+    const controller = new AbortController();
+    // 120초 타임아웃 — Render 무료 티어 콜드스타트(30~60초) 감안
+    const timeoutId = setTimeout(() => controller.abort(), 120_000);
     try {
       const API_BASE = process.env.NEXT_PUBLIC_API_URL || "https://pick-and-go-1.onrender.com";
       const res = await fetch(`${API_BASE}/api/v1/generate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(userData),
+        signal: controller.signal,
       });
       if (res.ok) {
         const newData = await res.json();
         setApiData(newData);
-        localStorage.setItem("api_result", JSON.stringify(newData));
+        // page.tsx와 동일한 { data, savedAt } 형식으로 저장
+        localStorage.setItem("api_result", JSON.stringify({ data: newData, savedAt: Date.now() }));
         setActiveTab(0);
         setSelectedDay("all");
       } else {
-        alert("일정 다시 생성 실패!");
+        const errJson = await res.json().catch(() => ({}));
+        const msg = (errJson as any).detail || (errJson as any).error_message || "일정 다시 생성에 실패했습니다.";
+        alert(msg);
       }
-    } catch (e) {
-      console.error(e);
-      alert("서버 오류가 발생했습니다.");
+    } catch (e: any) {
+      if (e?.name === "AbortError") {
+        alert("서버 응답 시간이 초과되었습니다. 잠시 후 다시 시도해 주세요.");
+      } else {
+        console.error(e);
+        alert("서버 오류가 발생했습니다.");
+      }
     } finally {
+      clearTimeout(timeoutId);
       setIsRegenerating(false);
     }
   };
