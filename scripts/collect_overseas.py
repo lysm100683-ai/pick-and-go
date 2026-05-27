@@ -342,8 +342,12 @@ def collect_overture(city: str, limit: int = 3000) -> List[Dict[str, Any]]:
 #  소스 2: OpenStreetMap Overpass API
 # ──────────────────────────────────────────────────────────────
 
-OVERPASS_URL = "https://overpass-api.de/api/interpreter"
-OVERPASS_ALT = "https://overpass.kumi.systems/api/interpreter"  # 백업 서버
+OVERPASS_SERVERS = [
+    "https://overpass-api.de/api/interpreter",
+    "https://overpass.openstreetmap.ru/api/interpreter",
+    "https://overpass.nchc.org.tw/api/interpreter",
+    "https://overpass.kumi.systems/api/interpreter",
+]
 
 def collect_osm(city: str, limit: int = 2000) -> List[Dict[str, Any]]:
     """
@@ -377,16 +381,30 @@ def collect_osm(city: str, limit: int = 2000) -> List[Dict[str, Any]]:
     out body {limit};
     """
 
+    # Overpass API 요청 헤더 — User-Agent + Accept 명시 필수
+    osm_headers = {
+        "User-Agent": "PickAndGo/1.0 (travel-itinerary-app)",
+        "Accept":     "application/json",
+    }
+
+    elements = []
     print(f"  OSM Overpass 쿼리 중... ({city})")
-    for attempt, url in enumerate([OVERPASS_URL, OVERPASS_ALT]):
+    for attempt, url in enumerate(OVERPASS_SERVERS):
         try:
-            resp = requests.post(url, data={"data": query}, timeout=120)
+            # GET 방식으로 시도 (일부 서버가 POST 406 반환)
+            resp = requests.get(url, params={"data": query},
+                                headers=osm_headers, timeout=120)
+            if resp.status_code == 406:
+                # GET도 406이면 POST로 재시도
+                resp = requests.post(url, data=query,
+                                     headers=osm_headers, timeout=120)
             resp.raise_for_status()
             elements = resp.json().get("elements", [])
+            print(f"  ✅ {url} 연결 성공")
             break
         except Exception as e_req:
             print(f"  [경고] {url} 실패: {e_req}")
-            if attempt == 1:
+            if attempt == len(OVERPASS_SERVERS) - 1:
                 print("  [오류] OSM 서버 모두 응답 없음")
                 return []
             time.sleep(3)
