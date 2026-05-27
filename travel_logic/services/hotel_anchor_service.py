@@ -15,9 +15,11 @@ Phase 4: 숙소 앵커링 (숙소 위치 확정)
   1. hotel_candidates 풀 중 사용자 star_rating 조건 충족 + 목표 좌표와 Haversine 최소
   2. 1번이 비어있으면 base_hotel 유지 (최최종 폴백)
 
-plan.md 설계 원칙:
+설계 원칙:
   - num_hotels == 1: 숙소 고정, 앵커링 로직 실행하지 않음
-  - num_hotels >= 2: 이동시간 분석 후 숙소 위치 최적화
+  - num_hotels == 2: 최대 1회 숙소 교체 (여행 절반 지점 or 가장 혼잡한 날 1곳)
+  - num_hotels == N: 최대 N-1회 교체, 여행을 N구간으로 분할하여 구간별 최적 숙소
+  - max_changes = num_hotels - 1 (교체 횟수 상한)
   - night_hotels: [1박 숙소, 2박 숙소, ..., (num_days-1)박 숙소]
     마지막 날(귀국/귀가)은 숙소 없음 → 리스트 길이 = num_days - 1
 
@@ -85,6 +87,9 @@ class HotelAnchorService:
             return [base_hotel] * num_nights
 
         # ── 케이스 2: 멀티 숙소 — 이동시간 분석 후 앵커링 ─────────
+        # max_changes: num_hotels=2 → 1회 교체, num_hotels=3 → 2회 교체
+        max_changes = num_hotels - 1
+
         # 기본값: 모든 박 base_hotel
         night_hotels: List[Optional[Dict[str, Any]]] = [base_hotel] * num_nights
 
@@ -97,47 +102,67 @@ class HotelAnchorService:
         ]
 
         if over_threshold_days:
-            # ── 상황 A: 초과 날의 클러스터 중심 근처 숙소로 교체 ───
-            for day_idx in over_threshold_days:
-                # night_hotels는 day_idx번 밤(박)의 숙소
-                # day_idx = 0이면 1일차 밤 → 1박 숙소
-                # 마지막 날(day_idx == num_days-1)은 귀가이므로 야간 숙소 없음
+            # ── 상황 A: 이동 부하 큰 날 기준 숙소 교체 (max_changes회까지) ──
+            # 가장 심각한 날(최대 구간 이동시간 기준) 순으로 정렬 후 상위 max_changes개만 선택
+            over_threshold_days.sort(
+                key=lambda i: max(
+                    (t for t in daily_travel_times[i] if t >= HOTEL_ANCHOR_TIME_THRESHOLD),
+                    default=0,
+                ),
+                reverse=True,
+            )
+            days_to_change = sorted(over_threshold_days[:max_changes])
+
+            for s_idx, day_idx in enumerate(days_to_change):
                 if day_idx >= num_nights:
                     continue
-
                 centroid = centroids[day_idx] if day_idx < len(centroids) else None
                 if not centroid or centroid == (0.0, 0.0):
                     continue
-
                 new_hotel = HotelAnchorService._find_nearest_hotel(
                     centroid[0], centroid[1],
                     hotel_candidates,
                     user_data,
                 )
                 if new_hotel:
-                    night_hotels[day_idx] = new_hotel
+                    # 이 교체 지점부터 다음 교체 지점 전날까지 새 숙소 적용
+                    next_day = days_to_change[s_idx + 1] if s_idx + 1 < len(days_to_change) else num_nights
+                    for i in range(day_idx, next_day):
+                        if i < num_nights:
+                            night_hotels[i] = new_hotel
 
         else:
-            # ── 상황 B: 모든 날 이동시간 비슷 → 중간 날 마지막 장소 근처 ─
-            # 중간 날짜 인덱스 (0-based)
-            mid_idx = (num_days - 1) // 2
-            last_place = (
-                last_places_per_day[mid_idx]
-                if mid_idx < len(last_places_per_day)
-                else None
-            )
+            # ── 상황 B: 이동 부하 비슷 → 여행을 max_changes+1 구간으로 균등 분할 ──
+            # num_hotels=2 → 여행 절반 지점에서 1회 교체
+            # num_hotels=3 → 1/3, 2/3 지점에서 2회 교체
+            if max_changes >= 1 and num_nights >= 2:
+                segment_size = num_nights / (max_changes + 1)
+                switch_nights: List[int] = []
+                for k in range(1, max_changes + 1):
+                    sn = max(1, min(int(round(segment_size * k)), num_nights - 1))
+                    if sn not in switch_nights:
+                        switch_nights.append(sn)
+                switch_nights.sort()
 
-            if last_place and last_place.get('lat') and last_place.get('lng'):
-                new_hotel = HotelAnchorService._find_nearest_hotel(
-                    float(last_place['lat']),
-                    float(last_place['lng']),
-                    hotel_candidates,
-                    user_data,
-                )
-                if new_hotel:
-                    # 중간 날 이후 모든 박을 새 숙소로 교체
-                    for i in range(mid_idx, num_nights):
-                        night_hotels[i] = new_hotel
+                for s_idx, switch_night in enumerate(switch_nights):
+                    last_place = (
+                        last_places_per_day[switch_night]
+                        if switch_night < len(last_places_per_day)
+                        else None
+                    )
+                    if last_place and last_place.get('lat') and last_place.get('lng'):
+                        new_hotel = HotelAnchorService._find_nearest_hotel(
+                            float(last_place['lat']),
+                            float(last_place['lng']),
+                            hotel_candidates,
+                            user_data,
+                        )
+                        if new_hotel:
+                            # 이 교체 지점부터 다음 교체 지점 전날까지 적용
+                            next_switch = switch_nights[s_idx + 1] if s_idx + 1 < len(switch_nights) else num_nights
+                            for i in range(switch_night, next_switch):
+                                if i < num_nights:
+                                    night_hotels[i] = new_hotel
 
         return night_hotels
 
