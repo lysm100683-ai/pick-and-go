@@ -304,23 +304,44 @@ class ItineraryGenerator:
         hotel_ids = {p.get('id') for p in hotels}
         non_hotels = [p for p in places if p.get('id') not in hotel_ids]
 
-        # ── [Phase 1] extract_top_n: 여행일수 × CANDIDATE_POOL_RATIO 개만 추출 ──
-        #    places는 이미 score 내림차순 정렬되어 있음
+        # ── [Phase 1] 전체 non_hotels를 먼저 관광/식당/카페로 분류 ──────
+        # [BUG FIX] 기존 방식: extract_top_n(전체) → categorize_visits(상위 N개만)
+        #   문제: DB 상위 N개가 전부 관광지 평점 상위이면 foods/cafes가 pool에 포함 안 됨
+        #         → foods/cafes 슬롯에 관광지가 배치되거나 아예 비어버림
+        # 수정 방식: categorize_visits(전체) → sights에만 extract_top_n 적용
+        #   - sights : 관광지 상위 N개 (기존 top_N 로직 유지)
+        #   - foods  : 전체 중 식당 분류된 것 최대 30개 (풀 충분히 확보)
+        #   - cafes  : 전체 중 카페 분류된 것 최대 15개
         num_days = user_data.get('_duration', len(non_hotels) // CANDIDATE_POOL_RATIO or 1)
-        candidate_pool = self.scoring_service.extract_top_n(non_hotels, num_days)
 
-        # ── [Phase 1] categorize_visits: 관광·식당·카페로 분류 ───────
-        sights, foods, cafes = self.scoring_service.categorize_visits(
-            candidate_pool, user_data
+        all_sights_raw, all_foods_raw, all_cafes_raw = self.scoring_service.categorize_visits(
+            non_hotels, user_data
         )
 
-        # 예비 후보 (분류 결과가 빈 경우 fallback)
+        # sights: top-N 제한 유지 (기존과 동일)
+        sights = self.scoring_service.extract_top_n(all_sights_raw, num_days)
+        # foods/cafes: score 내림차순으로 최대 30/15개 확보 (top-N 제한 없음)
+        foods = all_foods_raw[:30]
+        cafes = all_cafes_raw[:15]
+
+        # 예비 후보 (분류 후에도 비어있는 경우 — DB에 해당 카테고리 데이터 없음)
         if not sights:
             sights = non_hotels[:20]
         if not foods:
-            foods = non_hotels[:15]
+            # Kakao/Google category 키워드 기반 재시도
+            _food_kw = ('식당', '음식점', '한식', '일식', '중식', '양식', '고기', '구이',
+                        '해산물', '분식', 'restaurant', 'food', '맛집', '파인다이닝')
+            foods = [p for p in non_hotels
+                     if any(kw in str(p.get('category', '')).lower() for kw in _food_kw)][:15]
+            if not foods:
+                foods = non_hotels[:15]
         if not cafes:
-            cafes = non_hotels[:5]
+            # Kakao/Google category 키워드 기반 재시도
+            _cafe_kw = ('카페', 'cafe', 'coffee', '커피', '베이커리', '디저트', '브런치', '전통차')
+            cafes = [p for p in non_hotels
+                     if any(kw in str(p.get('category', '')).lower() for kw in _cafe_kw)][:5]
+            if not cafes:
+                cafes = non_hotels[:5]
         if not hotels:
             hotels = [airport_place] if airport_place else []
 
