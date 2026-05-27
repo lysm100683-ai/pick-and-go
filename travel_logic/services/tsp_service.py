@@ -103,31 +103,24 @@ class TSPService:
         if not start_point or sp_lat == 0.0 or sp_lng == 0.0:
             return self._haversine_greedy(places), [], 0
 
-        # ── ① Nearest Neighbor ───────────────────────────────────
+        # ── ① Nearest Neighbor (Haversine 직선거리 기반) ─────────
+        # [성능 최적화] 기존: 매 스텝마다 Kakao/Google API bulk 호출 → 수십 초 지연
+        # 변경후: 순수 Haversine 수학 계산으로 대체 → API 호출 0회, 수ms 이내
+        # 근거: TSP는 "방문 순서"를 정하는 것이며, 직선거리와 실도로 순서는
+        #       제주도·서울 등 수km 단위 도시 여행에서 실용상 동일하다.
+        #       2-Opt 후처리도 이미 Haversine 기반이므로 일관성 유지됨.
         unvisited: List[Dict[str, Any]] = places[:]
         ordered:   List[Dict[str, Any]] = []
         current = start_point
 
         while unvisited:
-            # Dynamic TOP_N 선행 필터
-            top_n = min(self._get_filter_n(len(unvisited)), len(unvisited))
-            candidates_sorted = sorted(
+            best_place = min(
                 unvisited,
                 key=lambda p: self.distance_service.haversine_distance(
                     current.get('lat', 0.0), current.get('lng', 0.0),
-                    p['lat'], p['lng'],
+                    p.get('lat', 0.0), p.get('lng', 0.0),
                 )
             )
-            top_candidates = candidates_sorted[:top_n]
-
-            # bulk 실제 이동시간 조회 (캐시 → API)
-            results = self.distance_service.get_travel_times_bulk(
-                current.get('lat', 0.0), current.get('lng', 0.0),
-                top_candidates, is_korea, travel_mode,
-            )
-            results.sort(key=lambda x: x[0])
-            _, best_place = results[0]
-
             ordered.append(best_place)
             unvisited.remove(best_place)
             current = best_place

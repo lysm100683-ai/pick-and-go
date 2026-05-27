@@ -25,13 +25,19 @@ class OptimizationService:
     ) -> Optional[Dict[str, Any]]:
         """
         Epsilon-greedy + Cost 기반으로 다음 방문 장소 선택
+
+        [성능 최적화 v2]
+        이동시간 계산을 Kakao/Google API → Haversine 근사로 변경.
+        - 카페·식사 후보는 수백m~2km 이내 근거리이므로 직선거리 기반 비교로 충분.
+        - 식사 장소는 find_best_meal_insertion()이 Haversine으로 처리하므로
+          이 함수는 주로 카페 선택에 사용됨.
         
         Args:
             candidates: 후보 장소 리스트
             current_place: 현재 위치
             strategy_weights: 전략별 가중치 (W_time, W_score, epsilon, food_boost, sight_boost)
-            is_korea: 국내 여행 여부
-            mode: 이동 수단
+            is_korea: 국내 여행 여부 (호환성 유지용, 내부에서 미사용)
+            mode: 이동 수단 (호환성 유지용, 내부에서 미사용)
             place_type: 장소 타입 ('식사', '카페', '관광')
             
         Returns:
@@ -51,26 +57,18 @@ class OptimizationService:
         
         # 현재 위치가 유효한 경우에만 최적화 시도
         if current_place and current_place.get('lat', 0.0) != 0.0 and current_place.get('lng', 0.0) != 0.0:
-            # [BUG-8 fix] in-place sort 대신 sorted()를 사용하여 원본 리스트 보호
-            candidates_sorted_by_dist = sorted(
-                candidates,
-                key=lambda p: self.distance_service.haversine_distance(
-                    current_place['lat'], current_place['lng'], p['lat'], p['lng']
-                )
-            )
-            top_candidates = candidates_sorted_by_dist[:10]
-            
-            # 실제 이동시간 조회 (병렬, 캐시 우선)
-            results = self.distance_service.get_travel_times_bulk(
-                current_place['lat'], current_place['lng'], 
-                top_candidates, is_korea, mode
-            )
-            
-            # Cost 계산
+            # Haversine 직선거리 기반 이동시간 근사 (시내 평균 40km/h 가정)
+            SPEED_KMH = 40.0
+
             final_costs = []
-            for travel_time, place in results:
+            for place in candidates:
+                km = self.distance_service.haversine_distance(
+                    current_place['lat'], current_place['lng'],
+                    place.get('lat', 0.0), place.get('lng', 0.0),
+                )
+                travel_time_sec = int(km / SPEED_KMH * 3600)
                 cost = self._calculate_cost(
-                    travel_time, place, strategy_weights, place_type
+                    travel_time_sec, place, strategy_weights, place_type
                 )
                 final_costs.append((cost, place))
             
