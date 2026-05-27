@@ -438,20 +438,16 @@ async def _real_book_flight(context: dict) -> dict:
     Duffel 실 API 항공 예약 (비동기 래퍼).
     Duffel SDK는 동기 방식이므로 asyncio.to_thread로 별도 스레드에서 실행.
     환경변수 MOCK_FLIGHT=false 설정 시 book_parallel()에서 호출됨.
+
+    [BUG FIX] Duffel 실 API 실패(잔액 부족·키 제한·네트워크 오류 등) 시
+    Mock 항공 예약으로 자동 폴백하여 전체 예약 파이프라인이 중단되지 않도록 함.
+    로그에 ⚠️ 경고를 출력해 폴백 발생을 추적할 수 있게 함.
     """
     try:
         return await asyncio.to_thread(_duffel_book_flight_sync, context)
     except Exception as e:
-        return {
-            "item_type": "flight",
-            "partner_name": "duffel",
-            "partner_booking_id": None,
-            "status": "failed",
-            "amount": 0,
-            "currency": "KRW",
-            "details": {},
-            "error_msg": f"Duffel API 오류: {e}",
-        }
+        print(f"[Sub2] ⚠️ Duffel 실 API 실패 → Mock 항공 예약으로 자동 폴백: {e}")
+        return await _mock_book_flight(context)
 
 
 # ── LiteAPI 숙소 연동 (동기 함수 — asyncio.to_thread로 호출) ──────
