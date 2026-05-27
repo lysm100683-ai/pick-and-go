@@ -81,10 +81,17 @@ async def _verify_partner_booking(item: dict) -> bool:
     - MOCK_VERIFY=true  → 항상 통과 (단위 테스트용)
     - MOCK_VERIFY=false → 항공: Duffel GET /air/orders/{id}
                           숙소: LiteAPI GET /bookings/{id}
+
+    [BUG FIX] Sub2가 Mock 모드(MOCK_FLIGHT=true)일 때 생성하는 가짜 booking_id
+    (예: FL-XXXXXXXX, partner_name: "amadeus_mock")를 MOCK_VERIFY=false 상태에서
+    실제 Duffel/LiteAPI에 조회하면 404 → 항상 검증 실패 발생.
+    partner_name에 "mock"이 포함된 항목은 Mock 예약이므로 실 API 검증을 건너뜀.
     """
     if not item.get("partner_booking_id"):
         return False
-    if MOCK_VERIFY:
+    # Mock 예약 자동 감지 (partner_name: "amadeus_mock", "booking_com_mock" 등)
+    partner_name = item.get("partner_name", "").lower()
+    if MOCK_VERIFY or "mock" in partner_name:
         await asyncio.sleep(0.05)  # API 응답 시뮬레이션
         return True
     item_type = item.get("item_type", "")

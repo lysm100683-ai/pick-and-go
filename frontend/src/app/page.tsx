@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Plane, Calendar, Users, MapPin, Wallet, Compass, Car, Home as HomeIcon, Camera, Utensils, Briefcase, Info, Sparkles, AlertTriangle, RefreshCw, Search } from "lucide-react";
 import { format, addDays } from "date-fns";
 import { useRouter } from "next/navigation";
@@ -67,6 +67,13 @@ export default function Home() {
     message: string;
   } | null>(null);
   const [modalLoading, setModalLoading] = useState<"relax" | "fetch" | null>(null);
+
+  // Render 무료 티어 cold-start(30~60s) 방지: 폼 페이지 진입 즉시 서버 선제 워밍업
+  // 사용자가 폼을 채우는 동안 백그라운드에서 서버를 깨워둠 → 제출 시 즉시 처리
+  useEffect(() => {
+    const API_BASE = process.env.NEXT_PUBLIC_API_URL || "https://pick-and-go-1.onrender.com";
+    fetch(`${API_BASE}/`, { method: "GET" }).catch(() => {});
+  }, []);
 
   const handleChange = (e: any) => {
     const { name, value, type, checked } = e.target;
