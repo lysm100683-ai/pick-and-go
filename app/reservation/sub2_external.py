@@ -325,6 +325,43 @@ def _duffel_get(path: str, params: dict = None, _retry: int = 1) -> dict:
     raise last_exc
 
 
+# ── 도시명 → IATA 공항 코드 매핑 ──────────────────────────────────
+# 폼에서 한국어 도시명(예: "도쿄")이 전달되면 Duffel이 422를 반환하므로 변환 필요.
+_CITY_TO_IATA: dict[str, str] = {
+    # 한국
+    "서울": "ICN", "서울/인천": "ICN", "인천": "ICN", "김포": "GMP",
+    "제주": "CJU", "부산": "PUS", "대구": "TAE", "청주": "CJJ",
+    # 일본
+    "도쿄": "NRT", "오사카": "KIX", "후쿠오카": "FUK", "삿포로": "CTS",
+    "나고야": "NGO", "오키나와": "OKA",
+    # 중국·대만·홍콩
+    "베이징": "PEK", "상하이": "PVG", "홍콩": "HKG", "타이페이": "TPE",
+    "광저우": "CAN", "청두": "CTU",
+    # 동남아
+    "방콕": "BKK", "싱가포르": "SIN", "쿠알라룸푸르": "KUL",
+    "마닐라": "MNL", "자카르타": "CGK", "발리": "DPS", "하노이": "HAN",
+    "호치민": "SGN", "다낭": "DAD",
+    # 유럽
+    "파리": "CDG", "런던": "LHR", "로마": "FCO", "바르셀로나": "BCN",
+    "암스테르담": "AMS", "프랑크푸르트": "FRA", "이스탄불": "IST",
+    "취리히": "ZRH", "빈": "VIE", "브뤼셀": "BRU",
+    # 북미
+    "뉴욕": "JFK", "로스앤젤레스": "LAX", "LA": "LAX",
+    "샌프란시스코": "SFO", "시카고": "ORD", "밴쿠버": "YVR",
+    "토론토": "YYZ", "시애틀": "SEA", "라스베이거스": "LAS",
+    # 오세아니아·기타
+    "시드니": "SYD", "멜버른": "MEL", "오클랜드": "AKL",
+    "두바이": "DXB", "도하": "DOH",
+}
+
+def _to_iata(city: str) -> str:
+    """도시명을 IATA 코드로 변환. 이미 3글자 코드면 대문자 그대로 반환."""
+    city = city.strip()
+    if len(city) == 3 and city.isalpha():
+        return city.upper()
+    return _CITY_TO_IATA.get(city, city)  # 매핑 없으면 원본 그대로 (Duffel이 검증)
+
+
 def _duffel_book_flight_sync(context: dict) -> dict:
     """
     Duffel API v2로 항공권을 실제 예약하는 동기 함수.
@@ -334,8 +371,8 @@ def _duffel_book_flight_sync(context: dict) -> dict:
       3. 예약 확정    — Duffel balance로 테스트 결제 후 order_id 발급
       4. 결과 반환    — 내부 포맷(partner_booking_id = order_id)으로 변환
     """
-    dep    = context.get("dep_city",  "ICN")
-    dest   = context.get("dest_city", "NRT")
+    dep    = _to_iata(context.get("dep_city",  "ICN"))
+    dest   = _to_iata(context.get("dest_city", "NRT"))
     start  = str(context.get("start_date", ""))
     people = int(context.get("people", 1))
 
