@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { 
   Map, Calendar, Navigation, ArrowLeft, ExternalLink, RefreshCw, Database, 
   CreditCard, Mail, User, ShieldCheck, Ticket, CheckCircle2, AlertCircle, Loader2, Sparkles
@@ -35,7 +35,7 @@ export default function ResultPage() {
 
   // 🗺️ 지도 렌더링 상태 변수
   const [isLeafletLoaded, setIsLeafletLoaded] = useState(false);
-  const [mapInstance, setMapInstance] = useState<any>(null);
+  const mapRef = useRef<any>(null);  // mapInstance를 useRef로 관리 — stale closure 방지
   const [isRouteLoading, setIsRouteLoading] = useState(false);
 
   // 1. 초기 데이터 로드 (localStorage)
@@ -117,8 +117,18 @@ export default function ResultPage() {
     if (!container) return;
 
     // 기존 Leaflet 인스턴스 정리
-    if (mapInstance) {
-      mapInstance.remove();
+    // [BUG FIX] Leaflet은 동일 div를 두 번 초기화하면 "Map container is already initialized" 오류를 낸다.
+    // 탭(안2) 또는 일차(2일차)를 선택할 때마다 useEffect가 재실행되어 이 문제가 발생함.
+    // 해결책:
+    //   1) mapRef.current로 stale closure 제거 (state는 리렌더 전 값을 참조할 수 있음)
+    //   2) _leaflet_id 삭제로 Leaflet 내부 초기화 상태를 완전히 리셋
+    if (mapRef.current) {
+      mapRef.current.remove();
+      mapRef.current = null;
+    }
+    // Leaflet이 container div에 붙여놓는 내부 마크를 제거해 재초기화 허용
+    if ((container as any)._leaflet_id) {
+      delete (container as any)._leaflet_id;
     }
 
     // 맵 객체 생성
@@ -232,10 +242,13 @@ export default function ResultPage() {
     };
 
     renderRouteAndMarkers();
-    setMapInstance(map);
+    mapRef.current = map;  // state 대신 ref에 저장 — 리렌더 없이 언제나 최신값 실시간 참조
 
     return () => {
-      map.remove();
+      if (mapRef.current) {
+        mapRef.current.remove();
+        mapRef.current = null;
+      }
     };
   }, [isLeafletLoaded, apiData, activeTab, selectedDay]);
 
