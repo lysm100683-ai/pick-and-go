@@ -43,12 +43,17 @@ class ItineraryGenerator:
         # Phase 4: HotelAnchorService는 상태 없는 정적 메서드만 사용 (인스턴스 불필요)
         self.db_service = DBService()
         
-        # 테마별 전략 매핑
+        # 테마별 전략 매핑 (동적 테마용 strategy_type 키도 지원)
         self.strategies = {
-            "✨ 핵심 코스": CoreStrategy(),
+            "✨ 핵심 코스":    CoreStrategy(),
             "🍽️ 식도락 & 힐링": FoodieStrategy(),
-            "🌿 자연 & 관광": NatureStrategy(),
-            "🔥 액티브 & 핫플": ActiveStrategy()
+            "🌿 자연 & 관광":   NatureStrategy(),
+            "🔥 액티브 & 핫플": ActiveStrategy(),
+            # strategy_type 축약 키 (동적 테마에서 사용)
+            "core":    CoreStrategy(),
+            "foodie":  FoodieStrategy(),
+            "nature":  NatureStrategy(),
+            "active":  ActiveStrategy(),
         }
     
     def generate(self, user_data: Dict[str, Any], duration: int) -> List[Dict[str, Any]]:
@@ -193,8 +198,8 @@ class ItineraryGenerator:
             final_plans.append({
                 "theme": theme['name'],
                 "desc": theme['desc'],
-                "score": self._calc_theme_score(days, user_data, theme['strategy_key']),
-                "tags": user_data.get('style', []),
+                "score": self._calc_theme_score(days, user_data, theme.get('strategy_key', '✨ 핵심 코스')),
+                "tags": theme.get('tags', user_data.get('style', [])),  # 테마별 맞춤 태그
                 "days": days
             })
         
@@ -742,28 +747,36 @@ class ItineraryGenerator:
 
         bonus = 0.0
 
-        # 식도락 테마 × 맛집/휴양 취향
-        if strategy_key == "🍽️ 식도락 & 힐링":
-            if styles & {"맛집", "휴양"}:
+        # 동적 strategy_key('foodie','nature','active','core')와
+        # 기존 전체 키(emoji 포함) 둘 다 처리
+        is_foodie = strategy_key in ("🍽️ 식도락 & 힐링", "foodie")
+        is_nature = strategy_key in ("🌿 자연 & 관광", "nature")
+        is_active = strategy_key in ("🔥 액티브 & 핫플", "active")
+        is_core   = strategy_key in ("✨ 핵심 코스", "core")
+
+        # 식도락/힐링 계열 × 맛집/휴양 취향
+        if is_foodie:
+            if styles & {"맛집", "휴양", "카페투어", "호캉스"}:
                 bonus += 5.0
             if pace == "여유" or "커플" in companion or with_kids:
                 bonus += 3.0
 
-        # 자연 테마 × 자연/관광/문화 취향
-        elif strategy_key == "🌿 자연 & 관광":
-            if styles & {"자연", "관광", "문화"}:
+        # 자연/관광 계열 × 자연/관광/문화 취향
+        elif is_nature:
+            if styles & {"자연", "관광", "문화", "자연풍경", "역사/문화"}:
                 bonus += 5.0
 
-        # 액티브 테마 × 액티비티/쇼핑 취향
-        elif strategy_key == "🔥 액티브 & 핫플":
+        # 액티브/핫플 계열 × 액티비티/쇼핑 취향
+        elif is_active:
             if styles & {"액티비티", "쇼핑"}:
                 bonus += 5.0
             if pace == "빡빡" or "친구" in companion:
                 bonus += 3.0
 
-        # 핵심 코스는 항상 기본 보정
-        elif strategy_key == "✨ 핵심 코스":
+        # 핵심 코스 → 항상 기본 보정 + 사용자 선택 스타일이 많을수록 추가 보정
+        elif is_core:
             bonus += 2.0
+            bonus += min(len(styles) * 0.5, 3.0)  # 스타일 수 × 0.5점 (최대 3점)
 
         # 3. 고예산 = 평점 높은 장소 위주 → 소폭 추가 보정
         if user_data.get('budget_level') == '고':
@@ -774,20 +787,25 @@ class ItineraryGenerator:
 
     def _build_themes(self, user_data: Dict[str, Any], city: str = "") -> List[Dict[str, Any]]:
         """
-        사용자 입력을 분석해 항상 4개 테마를 구성.
+        사용자가 선택한 스타일 기반으로 4개의 의미 있는 테마 변형을 동적으로 구성.
 
-        - 조건에 맞는 테마는 사용자 맥락을 반영한 설명으로 우선 배치
-        - 조건 미충족 테마도 사용자 스타일·동행·페이스를 녹인 설명으로 보완 배치
-        - 항상 4개 반환 (SPEC-3)
+        [변경 전] 항상 고정된 4개 테마 (핵심/식도락/자연/액티브)
+                 → 사용자가 '휴양+관광'을 선택해도 '🔥 액티브 & 핫플'이 나오는 문제
+
+        [변경 후] 사용자 선택 스타일 조합 기반으로 동적 생성
+                 코스1: 선택 스타일 그대로 (주 테마)
+                 코스2: 선택 스타일 중 첫 번째 강조
+                 코스3: 선택 스타일 중 두 번째 강조 (또는 연관 스타일 추가)
+                 코스4: 선택 스타일에 식사/카페 보완
         """
-        styles     = set(user_data.get('style', []))
+        styles     = list(user_data.get('style', []))
+        styles_set = set(styles)
         pace       = user_data.get('pace', '보통')
         companions = user_data.get('companions', [])
         with_kids  = user_data.get('with_kids', False)
         city_label = city if city else "여행"
 
-        # ── 사용자 맥락 요약 문구 ──────────────────────────────────────────
-        _style_str = '·'.join(styles) if styles else '균형'
+        # ── 동행자 문구 ────────────────────────────────────────────────────
         _companion_str = (
             '아이와 함께' if with_kids
             else ('커플' if '커플' in companions
@@ -796,120 +814,104 @@ class ItineraryGenerator:
         )
         _pace_str = {'여유': '느긋하게', '빡빡': '알차게', '알차게': '알차게'}.get(pace, '')
 
-        def _ctx(*parts):
-            return ' '.join(p for p in parts if p)
+        # ── 스타일 → 전략/이모지/레이블 매핑 ────────────────────────────
+        STYLE_META = {
+            '휴양':      {'strategy': 'foodie',  'emoji': '🌊', 'label': '휴양',    'related': ['맛집', '카페투어']},
+            '관광':      {'strategy': 'nature',  'emoji': '🗺️', 'label': '관광',    'related': ['역사/문화', '자연풍경']},
+            '맛집':      {'strategy': 'foodie',  'emoji': '🍽️', 'label': '맛집',    'related': ['카페투어', '휴양']},
+            '쇼핑':      {'strategy': 'active',  'emoji': '🛍️', 'label': '쇼핑',    'related': ['액티비티', '관광']},
+            '액티비티':  {'strategy': 'active',  'emoji': '🔥', 'label': '액티비티','related': ['쇼핑', '자연풍경']},
+            '자연풍경':  {'strategy': 'nature',  'emoji': '🌿', 'label': '자연풍경','related': ['관광', '휴양']},
+            '역사/문화': {'strategy': 'nature',  'emoji': '🏛️', 'label': '역사/문화','related': ['관광', '자연풍경']},
+            '카페투어':  {'strategy': 'foodie',  'emoji': '☕', 'label': '카페투어','related': ['맛집', '휴양']},
+            '호캉스':    {'strategy': 'foodie',  'emoji': '🏨', 'label': '호캉스',  'related': ['휴양', '맛집']},
+        }
 
-        # ── 테마별 조건 매칭 여부 & 사용자 맥락 반영 desc ─────────────────
-        foodie_matched = (
-            bool(styles & {'맛집', '휴양'})
-            or pace == '여유'
-            or '커플' in companions
-            or '가족' in companions
-            or with_kids
+        # ── 스타일 없을 때 fallback ────────────────────────────────────
+        if not styles:
+            styles = ['관광', '맛집']
+            styles_set = set(styles)
+
+        # ── 코스 1: 사용자가 선택한 스타일 그대로 (주 테마) ─────────────
+        primary_labels = '·'.join(
+            STYLE_META.get(s, {}).get('label', s) for s in styles
         )
-        nature_matched = bool(styles & {'자연', '관광', '문화'})
-        active_matched = (
-            bool(styles & {'액티비티', '쇼핑'})
-            or pace == '빡빡'
-            or '친구' in companions
+        primary_emojis = ''.join(
+            STYLE_META.get(s, {}).get('emoji', '') for s in styles[:2]
         )
+        primary_strategy = STYLE_META.get(styles[0], {}).get('strategy', 'core')
+        _ctx_parts = [p for p in [_companion_str, _pace_str] if p]
+        _ctx_str = ' '.join(_ctx_parts)
 
-        def _core_desc() -> str:
-            parts = []
-            if styles:
-                parts.append(f'{_style_str} 취향')
-            if _companion_str:
-                parts.append(_companion_str)
-            if _pace_str:
-                parts.append(_pace_str)
-            if parts:
-                return f"{'·'.join(parts)}에 최적화된 {city_label} 핵심 동선"
-            return f'사용자 취향 기반의 가장 효율적인 {city_label} 동선'
+        course1 = {
+            'name': f'✨ {primary_emojis} {city_label} 맞춤 코스',
+            'desc': (
+                f"{primary_labels} 중심으로 {_ctx_str + ' ' if _ctx_str else ''}"
+                f"{city_label}의 핵심을 담은 최적 일정"
+            ),
+            'strategy_key': primary_strategy,
+            'tags': styles[:],
+        }
 
-        def _foodie_desc(matched: bool) -> str:
-            if matched:
-                parts = []
-                if '맛집' in styles:
-                    parts.append(f'{city_label} 현지 맛집')
-                if '휴양' in styles or pace == '여유':
-                    parts.append('카페·힐링')
-                if with_kids or '가족' in companions:
-                    parts.append('온 가족 식사')
-                if '커플' in companions:
-                    parts.append('분위기 있는 레스토랑')
-                base = '·'.join(parts) if parts else '맛집과 여유로운 휴식'
-                return f'{base} 중심의 일정'
-            return _ctx(
-                f'{city_label}의 대표 맛집과 카페를',
-                _companion_str, _pace_str + ' 즐기는 코스'
-            ) or '현지 맛집과 카페 중심의 여유로운 일정'
+        # ── 코스 2: 첫 번째 선택 스타일 강조 변형 ─────────────────────
+        s1 = styles[0]
+        s1_meta = STYLE_META.get(s1, {})
+        s1_related = s1_meta.get('related', [])
+        # 연관 스타일 중 사용자가 선택하지 않은 것 추가해 변형
+        s1_extra = next((r for r in s1_related if r not in styles_set), s1_related[0] if s1_related else '맛집')
+        s1_strategy = s1_meta.get('strategy', 'nature')
+        s1_extra_meta = STYLE_META.get(s1_extra, {})
 
-        def _nature_desc(matched: bool) -> str:
-            if matched:
-                parts = []
-                if '자연' in styles:
-                    parts.append(f'{city_label}의 자연 경관')
-                if '관광' in styles:
-                    parts.append('주요 명소')
-                if '문화' in styles:
-                    parts.append('역사·문화 탐방')
-                base = '·'.join(parts) if parts else '명소와 자연 경관'
-                return f'{base}을 중심으로 한 일정'
-            return _ctx(
-                f'{city_label}의 주요 명소와 자연 경관을',
-                _companion_str, _pace_str + ' 둘러보는 코스'
-            ) or f'{city_label}의 대표 명소와 자연을 둘러보는 일정'
+        course2 = {
+            'name': f"{s1_meta.get('emoji','🌿')} {s1_meta.get('label', s1)} & {s1_extra_meta.get('label', s1_extra)}",
+            'desc': (
+                f"{city_label}의 {s1_meta.get('label', s1)}에 "
+                f"{s1_extra_meta.get('label', s1_extra)}까지 더한 풍성한 일정"
+            ),
+            'strategy_key': s1_strategy,
+            'tags': [s1, s1_extra],
+        }
 
-        def _active_desc(matched: bool) -> str:
-            if matched:
-                parts = []
-                if '액티비티' in styles:
-                    parts.append('체험·액티비티')
-                if '쇼핑' in styles:
-                    parts.append('쇼핑')
-                if pace == '빡빡' or '친구' in companions:
-                    parts.append('인기 핫플')
-                base = '·'.join(parts) if parts else '액티비티와 핫플'
-                return f'{base}을 알차게 탐방하는 일정'
-            return _ctx(
-                f'{city_label}의 인기 핫플과 활동적인 장소를',
-                _companion_str, _pace_str + ' 탐방하는 코스'
-            ) or f'{city_label}의 인기 명소와 핫플을 활동적으로 탐방하는 일정'
+        # ── 코스 3: 두 번째 스타일 강조 (없으면 첫 번째 연관 스타일 사용) ─
+        if len(styles) >= 2:
+            s2 = styles[1]
+        else:
+            s2 = s1_related[0] if s1_related else '관광'
+        s2_meta = STYLE_META.get(s2, {})
+        s2_related = s2_meta.get('related', [])
+        s2_extra = next((r for r in s2_related if r not in styles_set and r != s2), s2_related[0] if s2_related else '관광')
+        s2_strategy = s2_meta.get('strategy', 'core')
+        s2_extra_meta = STYLE_META.get(s2_extra, {})
 
-        # ── 후보 테마 4개: 조건 일치(priority≤1) → 미충족(priority≥10) 순 정렬 ──
-        CANDIDATE_THEMES = [
-            {
-                'name': f'✨ {city_label} 핵심 코스',
-                'desc': _core_desc(),
-                'strategy_key': '✨ 핵심 코스',
-                'priority': 0,
-            },
-            {
-                'name': '🍽️ 식도락 & 힐링',
-                'desc': _foodie_desc(foodie_matched),
-                'strategy_key': '🍽️ 식도락 & 힐링',
-                'priority': 1 if foodie_matched else 10,
-            },
-            {
-                'name': '🌿 자연 & 관광',
-                'desc': _nature_desc(nature_matched),
-                'strategy_key': '🌿 자연 & 관광',
-                'priority': 1 if nature_matched else 11,
-            },
-            {
-                'name': '🔥 액티브 & 핫플',
-                'desc': _active_desc(active_matched),
-                'strategy_key': '🔥 액티브 & 핫플',
-                'priority': 1 if active_matched else 12,
-            },
-        ]
-        CANDIDATE_THEMES.sort(key=lambda t: t['priority'])
+        course3 = {
+            'name': f"{s2_meta.get('emoji','✨')} {s2_meta.get('label', s2)} 집중 코스",
+            'desc': (
+                f"{city_label}의 {s2_meta.get('label', s2)}을 "
+                f"{'알차게' if pace in ('빡빡', '알차게') else '여유롭게'} 즐기는 "
+                f"{s2_extra_meta.get('label', s2_extra)} 포함 일정"
+            ),
+            'strategy_key': s2_strategy,
+            'tags': [s2, s2_extra],
+        }
 
-        # strategy_key, priority는 외부에 노출하지 않음
-        return [
-            {'name': t['name'], 'desc': t['desc'], 'strategy_key': t['strategy_key']}
-            for t in CANDIDATE_THEMES
-        ]
+        # ── 코스 4: 선택 스타일 + 식사/카페 보완 (현지 음식 경험 추가) ──
+        # 사용자가 맛집/카페를 이미 선택했으면 관광으로 보완, 아니면 맛집으로 보완
+        has_food_style = bool(styles_set & {'맛집', '카페투어', '휴양'})
+        bonus_style = '관광' if has_food_style else '맛집'
+        bonus_meta = STYLE_META.get(bonus_style, {})
+        bonus_strategy = bonus_meta.get('strategy', 'foodie') if not has_food_style else 'nature'
+
+        course4 = {
+            'name': f"{primary_emojis}{bonus_meta.get('emoji','🍽️')} {primary_labels} & {bonus_meta.get('label', bonus_style)}",
+            'desc': (
+                f"{city_label}의 {primary_labels} 일정에 "
+                f"현지 {bonus_meta.get('label', bonus_style)} 경험을 더한 코스"
+            ),
+            'strategy_key': bonus_strategy,
+            'tags': styles[:] + [bonus_style],
+        }
+
+        return [course1, course2, course3, course4]
     
     def _create_daily_schedule(
         self, 
