@@ -218,7 +218,7 @@ class ItineraryGenerator:
                         pairs_to_fetch.append((p1['lat'], p1['lng'], p2['lat'], p2['lng']))
                         
         if pairs_to_fetch:
-            travel_mode = 'driving' if is_driving else 'transit'
+            travel_mode = _travel_mode_pre
             self.distance_service.preload_travel_times(pairs_to_fetch, is_korea, travel_mode)
             
             from datetime import datetime, timedelta
