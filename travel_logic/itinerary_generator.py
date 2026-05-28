@@ -378,9 +378,8 @@ class ItineraryGenerator:
 
         # 장소 풀 생성 및 셔플
         # pool_sights: sight_clusters가 없을 경우를 대비한 fallback 전체 풀
-        # [C-6 fix] 시드 고정 → 동일 입력이면 동일 결과 보장 (재현성 + 캐시 활용)
+        # (일정 재추천 시 다양한 결과를 위해 고정 시드 제거)
         pool_sights, pool_foods, pool_cafes = all_sights[:], all_foods[:], all_cafes[:]
-        random.seed(42)
         random.shuffle(pool_sights)
         random.shuffle(pool_foods)
         random.shuffle(pool_cafes)
@@ -645,16 +644,18 @@ class ItineraryGenerator:
                     elif current_time.hour >= target_range[1]:
                         continue
 
-                selected['is_start_point'] = False
+                # [BUG-2/3 fix] 원본 딕셔너리 오염(변이) 방지를 위해 복사본 생성 후 수정
+                selected_copy = {**selected, 'is_start_point': False, 'type_key': type_key}
+                
                 day_places.append(self._make_place(
                     current_time.strftime("%H:%M"),
                     type_kor,
-                    selected,
+                    selected_copy,
                     type_key
                 ))
                 visited_place_ids.add(selected['id'])
-                last_place = selected
-                last_place['type_key'] = type_key
+                last_place = selected_copy
+                
                 # [Phase 5-①] 관광지 방문 카운터 증가
                 if type_key == "관광":
                     sights_visited_today += 1
