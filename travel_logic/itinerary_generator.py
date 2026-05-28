@@ -218,9 +218,22 @@ class ItineraryGenerator:
                         pairs_to_fetch.append((p1['lat'], p1['lng'], p2['lat'], p2['lng']))
                         
         if pairs_to_fetch:
+            travel_mode = 'driving' if is_driving else 'transit'
             self.distance_service.preload_travel_times(pairs_to_fetch, is_korea, travel_mode)
             
             from datetime import datetime, timedelta
+            
+            # 체류시간 배율 계산 (_generate_for_theme 와 동일한 로직)
+            companions = user_data.get('companions', [])
+            stay_multiplier: float = COMPANION_STAY_MULTIPLIER.get('default', 1.0)
+            for companion_key, multiplier in COMPANION_STAY_MULTIPLIER.items():
+                if companion_key != 'default' and companion_key in companions:
+                    stay_multiplier *= multiplier
+            if user_data.get('with_kids', False):
+                kids_mult = COMPANION_STAY_MULTIPLIER.get('아이 동반', 1.3)
+                if '아이 동반' not in companions:
+                    stay_multiplier *= kids_mult
+            
             for plan in final_plans:
                 for day_obj in plan['days']:
                     places_list = day_obj.get('places', [])
