@@ -70,9 +70,15 @@ export default function Home() {
 
   // Render 무료 티어 cold-start(30~60s) 방지: 폼 페이지 진입 즉시 서버 선제 워밍업
   // 사용자가 폼을 채우는 동안 백그라운드에서 서버를 깨워둠 → 제출 시 즉시 처리
+  const [cities, setCities] = useState<string[]>([]);
+
   useEffect(() => {
     const API_BASE = process.env.NEXT_PUBLIC_API_URL || "https://pick-and-go-1.onrender.com";
     fetch(`${API_BASE}/`, { method: "GET" }).catch(() => {});
+    fetch(`${API_BASE}/api/v1/cities`)
+      .then(r => r.json())
+      .then(d => { if (d.cities?.length) setCities(d.cities); })
+      .catch(() => {});
   }, []);
 
   const handleChange = (e: any) => {
@@ -324,8 +330,10 @@ export default function Home() {
                 <label className="text-sm font-semibold text-slate-700 flex items-center gap-1">
                   목적지 도시 <Sparkles className="w-3 h-3 text-amber-400" />
                 </label>
-                <input type="text" name="dest_city" value={formData.dest_city} onChange={handleChange} 
-                  className="w-full bg-white border-2 border-blue-200 rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-blue-500 text-slate-800 font-bold shadow-sm" />
+                <select name="dest_city" value={formData.dest_city} onChange={handleChange}
+                  className="w-full bg-white border-2 border-blue-200 rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-blue-500 text-slate-800 font-bold shadow-sm">
+                  {cities.map(c => <option key={c} value={c}>{c}</option>)}
+                </select>
               </div>
 
               <div className="space-y-2">

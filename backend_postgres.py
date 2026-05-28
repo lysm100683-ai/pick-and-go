@@ -237,6 +237,15 @@ def get_places(city: str, category_filter: str = None, limit: int = 200) -> list
         return places
 
 
+def get_domestic_cities() -> list:
+    """places 테이블에서 국내 도시 목록 조회 (distinct, 가나다순)"""
+    from travel_logic.domain.validators import check_is_domestic
+    with get_db_session() as session:
+        rows = session.query(Place.city).distinct().all()
+    cities = sorted({r.city for r in rows if r.city and check_is_domestic(r.city)})
+    return cities
+
+
 def get_places_within_radius(lat: float, lng: float, radius_meters: int, 
                              city: str = None, min_rating: float = 0.0) -> list:
     """

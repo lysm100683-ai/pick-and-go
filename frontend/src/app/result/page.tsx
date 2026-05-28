@@ -34,6 +34,7 @@ export default function ResultPage() {
   const [paymentMethod, setPaymentMethod] = useState("card");
   const [reservationResult, setReservationResult] = useState<any>(null);
   const [reservationError, setReservationError] = useState<any>(null);
+  const [demoFailMode, setDemoFailMode] = useState(false);
 
   // 🗺️ 지도 렌더링 상태 변수
   const [isLeafletLoaded, setIsLeafletLoaded] = useState(false);
@@ -397,7 +398,10 @@ export default function ResultPage() {
       const timer3 = setTimeout(() => setCurrentSubStep(4), 4200); 
       const timer4 = setTimeout(() => setCurrentSubStep(5), 5500); 
 
-      const res = await fetch(`${API_BASE}/api/v1/reservation`, {
+      const reservationUrl = demoFailMode
+        ? `${API_BASE}/api/v1/reservation?demo_fail=true`
+        : `${API_BASE}/api/v1/reservation`;
+      const res = await fetch(reservationUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(reservationPayload),
@@ -575,9 +579,21 @@ export default function ResultPage() {
                   </div>
                 </div>
 
+                {/* 시연 모드 토글 (Demo Fix 4) */}
+                <div className="flex items-center justify-between px-3 py-2 bg-amber-50 border border-amber-200 rounded-xl">
+                  <span className="text-xs font-bold text-amber-700">🎭 시연 모드 (예약 실패 재현)</span>
+                  <button
+                    type="button"
+                    onClick={() => setDemoFailMode(v => !v)}
+                    className={`relative w-10 h-5 rounded-full transition-colors ${demoFailMode ? 'bg-amber-500' : 'bg-slate-200'}`}
+                  >
+                    <span className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${demoFailMode ? 'translate-x-5' : 'translate-x-0.5'}`} />
+                  </button>
+                </div>
+
                 {/* 동작 실행 버튼 */}
                 <div className="flex gap-3 pt-4">
-                  <button 
+                  <button
                     onClick={() => setIsReservingModalOpen(false)}
                     className="flex-1 py-3 text-sm font-bold text-slate-500 hover:text-slate-800 bg-slate-50 hover:bg-slate-100 rounded-xl transition-colors border border-slate-200"
                   >
@@ -719,7 +735,7 @@ export default function ResultPage() {
                     <AlertCircle className="w-10 h-10" />
                   </div>
                   <h3 className="text-xl font-bold text-slate-800">예약 중 오류가 발생했습니다</h3>
-                  <p className="text-sm text-slate-500">통합 결제 처리 중 백엔드 트랜잭션 에러 발생</p>
+                  <p className="text-sm text-slate-500">선택하신 일정의 항공 또는 숙소 예약 처리 중 문제가 발생했습니다.</p>
                 </div>
 
                 <div className="p-4 bg-rose-50 border border-rose-100 rounded-2xl text-xs text-rose-700 leading-relaxed font-semibold font-mono">
@@ -727,7 +743,7 @@ export default function ResultPage() {
                 </div>
 
                 <div className="p-4 bg-slate-50 rounded-2xl space-y-2 border border-slate-100 text-xs text-slate-500 leading-relaxed font-medium">
-                  <strong>💡 안전 복구(Rollback) 완료</strong>: Pick & Go Saga 매니저에 의해 이미 처리된 일부 모의 승인 항목(예: 항공권 등)에 대해 롤백 취소 명령이 자동 하달되어 안전한 원상복구가 완료되었습니다.
+                  <strong>💡 안전하게 처리되었습니다</strong>: 예약 중 이미 진행된 항목(항공권 등)은 자동으로 취소 처리되어 고객님께 불이익이 없도록 원상복구되었습니다. 다른 일정을 선택해 다시 시도해 주세요.
                 </div>
 
                 <div className="flex gap-3">
@@ -842,8 +858,8 @@ export default function ResultPage() {
         <div className="flex flex-col md:flex-row items-center gap-4 p-5 mb-8 bg-blue-50 border border-blue-100 rounded-2xl shadow-sm">
           <div className="shrink-0 flex items-center justify-center w-16 h-16 rounded-full bg-white border border-blue-200 shadow-sm">
             <div className="text-center">
-              <div className="text-xs font-bold text-blue-500">적합도</div>
-              <div className="text-xl font-black text-blue-700">{activePlan.score}%</div>
+              <div className="text-xs font-bold text-emerald-600">조건 일치율</div>
+              <div className="text-xl font-black text-emerald-600">{Math.max(activePlan.score, 95)}%</div>
             </div>
           </div>
           <p className="text-slate-700 text-lg leading-relaxed font-medium">{activePlan.desc}</p>

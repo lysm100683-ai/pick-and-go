@@ -3,7 +3,7 @@
 # [yeongmin] DB 마이그레이션 자동 실행, generate-relaxed, generate-fetch 엔드포인트
 # [main]     예약 5단계 파이프라인 (Sub1~5), 예약 성공률 통계 API
 # ─────────────────────────────────────────────────────────────
-from fastapi import FastAPI, HTTPException, BackgroundTasks, Response
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Response, Query
 from fastapi.middleware.cors import CORSMiddleware
 from datetime import date
 import asyncio
@@ -297,6 +297,7 @@ async def create_reservation(
     req: ReservationRequest,
     background_tasks: BackgroundTasks,
     response: Response,
+    demo_fail: bool = Query(False, description="시연용 강제 실패 모드 (demo_fail=true)"),
 ):
     """
     Sub1: 예약 검증부
@@ -305,6 +306,15 @@ async def create_reservation(
     Sub4: DB 저장 (트랜잭션)
     Sub5: 결과 안내 (성공/실패 응답)
     """
+    if demo_fail:
+        print("[Reservation] 🎭 시연 모드 — 강제 실패 응답 반환")
+        return build_fail_response(
+            error_code="BOOKING_FAILED",
+            error_message="항공 또는 숙소 예약 중 오류가 발생했습니다. 다른 일정을 선택해 주세요.",
+            retryable=True,
+            failed_items=[],
+        )
+
     t_start = time.perf_counter()
     print(f"\n{'='*50}")
     print(f"[Reservation] 🎫 예약 요청 수신 — user:{req.user_id}, {req.dep_city}→{req.dest_city}")
@@ -406,3 +416,15 @@ async def get_reservation_metrics(days: int = 7):
     days = min(max(days, 1), 90)
     stats = await get_stats_summary(period_days=days)
     return stats
+
+
+# ──────────────────────────────────────────────────────────────
+# 7. 국내 도시 목록 API (Demo Fix 1)
+# ──────────────────────────────────────────────────────────────
+@app.get(
+    "/api/v1/cities",
+    summary="DB 기반 국내 도시 목록",
+    description="places 테이블에 데이터가 있는 국내 도시 목록을 반환합니다.",
+)
+def list_cities():
+    return {"cities": backend.get_domestic_cities()}
