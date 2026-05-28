@@ -20,6 +20,7 @@ export default function ResultPage() {
   const [selectedDay, setSelectedDay] = useState("all");
   const [isRegenerating, setIsRegenerating] = useState(false);
   const [apiData, setApiData] = useState<any>(null);
+  const [previousApiData, setPreviousApiData] = useState<any>(null);
   const [userData, setUserData] = useState<any>(null);
   const [isLoading, setIsLoading] = useState(true);
 
@@ -255,6 +256,7 @@ export default function ResultPage() {
   const handleRegenerate = async () => {
     if (!userData) return;
     setIsRegenerating(true);
+    setPreviousApiData(apiData); // 현재 데이터를 이전 데이터로 저장
     const controller = new AbortController();
     // 120초 타임아웃 — Render 무료 티어 콜드스타트(30~60초) 감안
     const timeoutId = setTimeout(() => controller.abort(), 120_000);
@@ -392,6 +394,20 @@ export default function ResultPage() {
     } finally {
       setIsProcessing(false);
     }
+  };
+
+  // 새로 추천된 장소인지 확인하는 헬퍼 함수
+  const isNewPlace = (themeIdx: number, placeName: string) => {
+    if (!previousApiData) return false;
+    const prevPlan = previousApiData.plans[themeIdx];
+    if (!prevPlan) return false;
+    
+    for (const day of prevPlan.days) {
+      for (const place of day.places) {
+        if (place.name === placeName) return false;
+      }
+    }
+    return true;
   };
 
   if (isLoading) {
@@ -807,6 +823,11 @@ export default function ResultPage() {
                         <span className="px-2.5 py-1 bg-slate-50 border border-slate-200 text-slate-600 rounded-md text-xs font-medium">
                           {place.type}
                         </span>
+                        {previousApiData && isNewPlace(activeTab, place.name) && (
+                          <span className="flex items-center gap-1 px-2.5 py-1 bg-indigo-50 border border-indigo-200 text-indigo-600 rounded-md text-xs font-bold shadow-sm animate-pulse">
+                            <Sparkles className="w-3 h-3" /> 새로 추천됨
+                          </span>
+                        )}
                         {/* 영업 상태 경고 배지 — staleness_warning 필드 기반 */}
                         {place.staleness_warning === 'danger' && (
                           <span
