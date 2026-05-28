@@ -479,12 +479,28 @@ export default function Home() {
                     (new Date(formData.end_date).getTime() - new Date(formData.start_date).getTime())
                     / (1000 * 60 * 60 * 24)
                   ));
+                  // 중간 숙소 개수 옵션 생성 (3곳 ~ min(numNights-1, 5곳))
+                  // numNights == 2일 때 옵션 2와 옵션 3 value가 동일해지는 버그 방지
+                  const intermediateOptions = [];
+                  if (numNights >= 3) {
+                    const maxIntermediate = Math.min(numNights - 1, 5);
+                    for (let i = 3; i <= maxIntermediate; i++) {
+                      intermediateOptions.push(
+                        <option key={i} value={String(i)}>{i}곳에서 숙박 ({i - 1}회 이동)</option>
+                      );
+                    }
+                  }
                   return (
                     <select name="num_hotels" value={formData.num_hotels} onChange={handleChange}
                       className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 focus:ring-2 focus:ring-indigo-500 text-slate-700 font-medium">
                       <option value="1">1개 숙소만 이용 (전 일정 동일 숙소)</option>
-                      <option value="2">2곳에서 숙박 (여행 중간 1회 이동)</option>
-                      <option value={String(numNights)}>매일 다른 숙소 ({numNights}박 = {numNights}곳)</option>
+                      {numNights >= 2 && (
+                        <option value="2">2곳에서 숙박 (여행 중간 1회 이동)</option>
+                      )}
+                      {intermediateOptions}
+                      {numNights >= 3 && (
+                        <option value={String(numNights)}>매일 다른 숙소 ({numNights}박 = {numNights}곳)</option>
+                      )}
                     </select>
                   );
                 })()}

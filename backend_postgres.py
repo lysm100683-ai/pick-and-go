@@ -685,11 +685,40 @@ def fetch_google(city: str, keywords: list, is_domestic: bool = False) -> dict:
     added_count = 0
     updated_count = 0
 
+    def _fetch_place_details(place_id: str) -> dict:
+        """Place Details API 단건 호출 (병렬 실행용)"""
+        try:
+            return gmaps_client.place(
+                place_id=place_id,
+                fields=['reviews'],
+                language='ko'
+            ).get('result', {})
+        except Exception as e:
+            logger.debug(f"[fetch_google] Details 호출 실패 ({place_id}): {e}")
+            return {}
+
     for keyword in keywords:
         try:
             # Google Places Text Search API 호출
             response = gmaps_client.places(query=keyword, language='ko')
             results  = response.get('results', [])
+
+            # ★ Place Details 병렬 호출 (순차 → ~200회 × 150ms = 30초 → 병렬 4-6초)
+            # Text Search는 리뷰 데이터 미포함 → place_id로 Details API 병렬 수집
+            place_ids = [p.get('place_id', '') for p in results if p.get('place_id')]
+            details_map: dict = {}
+            if place_ids:
+                with concurrent.futures.ThreadPoolExecutor(max_workers=10) as detail_executor:
+                    future_to_pid = {
+                        detail_executor.submit(_fetch_place_details, pid): pid
+                        for pid in place_ids
+                    }
+                    for future in concurrent.futures.as_completed(future_to_pid):
+                        pid = future_to_pid[future]
+                        try:
+                            details_map[pid] = future.result()
+                        except Exception:
+                            details_map[pid] = {}
 
             with get_db_session() as session:
                 for place in results:
@@ -725,27 +754,18 @@ def fetch_google(city: str, keywords: list, is_domestic: bool = False) -> dict:
                         if photo_ref else ''
                     )
 
-                    # ★ Place Details API 호출으로 상위 5개 리뷰의 별점 수집
-                    # Text Search는 리뷰 데이터 미포함 → place_id로 Details 호출
+                    # ★ 병렬 수집된 Details에서 별점 분포 추출
                     rating_dist = {'rating_5star': 0, 'rating_4star': 0,
                                    'rating_3star': 0, 'rating_2star': 0, 'rating_1star': 0}
                     place_id = place.get('place_id', '')
-                    if place_id:
-                        try:
-                            details = gmaps_client.place(
-                                place_id=place_id,
-                                fields=['reviews'],
-                                language='ko'
-                            ).get('result', {})
-                            for review in details.get('reviews', []):
-                                stars = int(review.get('rating', 0))
-                                if stars == 5: rating_dist['rating_5star'] += 1
-                                elif stars == 4: rating_dist['rating_4star'] += 1
-                                elif stars == 3: rating_dist['rating_3star'] += 1
-                                elif stars == 2: rating_dist['rating_2star'] += 1
-                                elif stars == 1: rating_dist['rating_1star'] += 1
-                        except Exception as detail_err:
-                            logger.debug(f"[fetch_google] Details 호출 실패 ({place_id}): {detail_err}")
+                    details = details_map.get(place_id, {})
+                    for review in details.get('reviews', []):
+                        stars = int(review.get('rating', 0))
+                        if stars == 5: rating_dist['rating_5star'] += 1
+                        elif stars == 4: rating_dist['rating_4star'] += 1
+                        elif stars == 3: rating_dist['rating_3star'] += 1
+                        elif stars == 2: rating_dist['rating_2star'] += 1
+                        elif stars == 1: rating_dist['rating_1star'] += 1
 
                     place_data = {
                         'id':           f"google_{place.get('place_id', '')}",

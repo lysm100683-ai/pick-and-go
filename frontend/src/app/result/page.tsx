@@ -182,16 +182,18 @@ export default function ResultPage() {
       if (spotCoordinates.length > 0) {
         // 모든 좌표가 포함되도록 영역 설정
         map.fitBounds(spotCoordinates, { padding: [50, 50] });
+        // [BUG FIX] React 리렌더 후 컨테이너 크기 재계산 — 잘못된 뷰포트로 타일 요청 방지
+        map.invalidateSize();
 
         let finalRouteCoords = spotCoordinates;
 
-        // 🛣️ 2개 이상의 장소가 존재할 때 OSRM API를 호출하여 실제 도로 기준 경로선 획득
-        if (spotCoordinates.length > 1) {
+        // 🛣️ 2개 이상, 25개 이하 장소일 때 OSRM API 호출 (25개 초과 시 TooBig 에러 발생)
+        if (spotCoordinates.length > 1 && spotCoordinates.length <= 25) {
           setIsRouteLoading(true);
           const coordString = spotCoordinates.map(c => `${c[1]},${c[0]}`).join(';');
           // OSRM Driving Service
           const osrmUrl = `https://router.project-osrm.org/route/v1/driving/${coordString}?overview=full&geometries=geojson`;
-          
+
           try {
             const response = await fetch(osrmUrl);
             if (response.ok) {
@@ -199,7 +201,11 @@ export default function ResultPage() {
               if (routeData.routes && routeData.routes.length > 0) {
                 // OSRM은 [경도, 위도] 순으로 좌표를 주므로 [위도, 경도] 순으로 변환
                 finalRouteCoords = routeData.routes[0].geometry.coordinates.map((c: any) => [c[1], c[0]]);
+              } else {
+                console.warn(`OSRM: routes 없음 (code: ${routeData.code ?? 'unknown'}). 직선 경로 사용.`);
               }
+            } else {
+              console.warn(`OSRM HTTP ${response.status}. 직선 경로 사용.`);
             }
           } catch (err) {
             console.warn("OSRM 실제 도로 경로 호출 실패, 직선 경로로 대체합니다.", err);
@@ -207,6 +213,7 @@ export default function ResultPage() {
             setIsRouteLoading(false);
           }
         }
+        // 25개 초과 시 finalRouteCoords = spotCoordinates (직선 연결)로 유지
 
         // 1) 🛣️ 실제 도로 경로 실선 그리기
         L.polyline(finalRouteCoords, {
@@ -924,18 +931,21 @@ export default function ResultPage() {
               </div>
               
               {/* 🗺️ 실제 로딩 완료된 Leaflet 맵 컨테이너 탑재 */}
-              <div 
-                id="map-container" 
-                className="w-full h-[600px] bg-slate-50 rounded-3xl border border-slate-200 overflow-hidden relative shadow-xl shadow-slate-200/50 z-0"
-              >
-                {(isRouteLoading || !isLeafletLoaded) && (
-                  <div className="absolute inset-0 flex flex-col items-center justify-center bg-white/70 z-10">
-                    <Loader2 className="w-10 h-10 text-blue-500 animate-spin mb-3" />
-                    <p className="text-sm font-bold text-slate-500">
-                      {!isLeafletLoaded ? '대화형 지도 엔진 초기화 중...' : '🛣️ 실제 도로 경로 실시간 탐색 중...'}
-                    </p>
-                  </div>
-                )}
+              {/* [BUG FIX] overflow-hidden을 Leaflet div에 직접 두면 타일 클리핑 발생 → wrapper 분리 */}
+              <div className="w-full h-[600px] rounded-3xl border border-slate-200 overflow-hidden shadow-xl shadow-slate-200/50">
+                <div
+                  id="map-container"
+                  className="w-full h-full bg-slate-50 relative z-0"
+                >
+                  {(isRouteLoading || !isLeafletLoaded) && (
+                    <div className="absolute inset-0 flex flex-col items-center justify-center bg-white/70 z-10">
+                      <Loader2 className="w-10 h-10 text-blue-500 animate-spin mb-3" />
+                      <p className="text-sm font-bold text-slate-500">
+                        {!isLeafletLoaded ? '대화형 지도 엔진 초기화 중...' : '🛣️ 실제 도로 경로 실시간 탐색 중...'}
+                      </p>
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
           </div>
