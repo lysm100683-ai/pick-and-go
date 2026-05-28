@@ -58,6 +58,22 @@ class DistanceService:
         
         return distance
     
+    def get_approximate_travel_time(self, origin_lat: float, origin_lng: float, dest_lat: float, dest_lng: float) -> int:
+        """
+        Haversine 거리를 기반으로 도심 평균 속도를 적용하여 초단위 근사 이동시간을 즉시 반환 (API 없음)
+        - 제주/국내 평균 주행 속도: 약 30km/h (8.33m/s)
+        - 최저 180초(3분) 기본 소요시간 보정
+        """
+        dist_km = self.haversine_distance(origin_lat, origin_lng, dest_lat, dest_lng)
+        if dist_km == 99999:
+            return 30 * 60
+        
+        # 30km/h -> 1km 당 120초
+        time_sec = int(dist_km * 120)
+        
+        # 기본 신호대기/정차 등 고려한 최소 시간 (3분)
+        return max(180, time_sec)
+    
     def get_travel_time(self, origin_lat: float, origin_lng: float, 
                        dest_lat: float, dest_lng: float,
                        is_korea: bool, mode: str = 'driving') -> int:
@@ -144,3 +160,47 @@ class DistanceService:
             return backend.get_real_duration_google_bulk(
                 origin_lat, origin_lng, destinations, mode=mode
             )
+
+    def preload_travel_times(self, pairs: list, is_korea: bool, mode: str = 'driving') -> None:
+        """
+        주어진 (lat1, lng1, lat2, lng2) 쌍들의 이동시간을 병렬로 일괄 조회하여 캐시에 채워넣음.
+        이후 get_travel_time 호출 시 API 지연 없이 즉시 반환되도록 함.
+        """
+        import concurrent.futures
+        
+        tasks = []
+        for (lat1, lng1, lat2, lng2) in set(pairs):
+            if lat1 == 0.0 or lng1 == 0.0 or lat2 == 0.0 or lng2 == 0.0:
+                continue
+            cache_key = (
+                round(lat1, 4), round(lng1, 4),
+                round(lat2, 4), round(lng2, 4),
+                mode,
+            )
+            if cache_key not in self._time_cache:
+                tasks.append((lat1, lng1, lat2, lng2, cache_key))
+                
+        if not tasks:
+            return
+            
+        def fetch_task(task):
+            lat1, lng1, lat2, lng2, cache_key = task
+            if is_korea:
+                res = backend.get_real_duration_kakao(lat1, lng1, lat2, lng2, mode=mode)
+            else:
+                res_bulk = backend.get_real_duration_google_bulk(
+                    lat1, lng1, [{'lat': lat2, 'lng': lng2}], mode=mode
+                )
+                res = res_bulk[0][0] if res_bulk else 999999
+            return cache_key, res
+
+        # 15개의 워커로 병렬 처리 (생성 대기시간 10초 이내 달성 목적)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=15) as executor:
+            future_to_task = {executor.submit(fetch_task, t): t for t in tasks}
+            for future in concurrent.futures.as_completed(future_to_task):
+                try:
+                    c_key, result = future.result()
+                    if result != 999999:
+                        self._time_cache[c_key] = result
+                except Exception:
+                    pass

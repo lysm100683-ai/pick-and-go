@@ -202,6 +202,63 @@ class ItineraryGenerator:
                 "tags": theme.get('tags', user_data.get('style', [])),  # 테마별 맞춤 태그
                 "days": days
             })
+            
+        # ── [Phase 6] 비동기 병렬 이동시간 프리패치 및 타임스탬프 정확도 보정 ──
+        # 스케줄링 자체는 Haversine 근사치로 빠르게(1~2초) 완료되었음.
+        # 최종적으로 UI에 정확한 카카오내비 시간을 보여주기 위해
+        # 선택된 장소 쌍을 모아 비동기로 일괄 조회 후 타임스탬프를 다시 계산함.
+        pairs_to_fetch = []
+        for plan in final_plans:
+            for day_obj in plan['days']:
+                places_list = day_obj.get('places', [])
+                for i in range(len(places_list) - 1):
+                    p1 = places_list[i]
+                    p2 = places_list[i+1]
+                    if p1.get('lat') and p1.get('lng') and p2.get('lat') and p2.get('lng'):
+                        pairs_to_fetch.append((p1['lat'], p1['lng'], p2['lat'], p2['lng']))
+                        
+        if pairs_to_fetch:
+            self.distance_service.preload_travel_times(pairs_to_fetch, is_korea, travel_mode)
+            
+            from datetime import datetime, timedelta
+            for plan in final_plans:
+                for day_obj in plan['days']:
+                    places_list = day_obj.get('places', [])
+                    if not places_list:
+                        continue
+                        
+                    first_time_str = places_list[0].get('time', '10:00')
+                    try:
+                        hour, minute = map(int, first_time_str.split(':'))
+                    except Exception:
+                        hour, minute = 10, 0
+                        
+                    base_date = datetime.now().date()
+                    current_time = datetime.combine(base_date, datetime.min.time()) + timedelta(hours=hour, minutes=minute)
+                    
+                    for i in range(len(places_list)):
+                        curr_p = places_list[i]
+                        curr_p['time'] = current_time.strftime("%H:%M")
+                        
+                        if i < len(places_list) - 1:
+                            next_p = places_list[i+1]
+                            
+                            p_type_key = curr_p.get('type_key', 'default')
+                            base_visit_sec = VISIT_TIMES.get(p_type_key, VISIT_TIMES['default'])
+                            if p_type_key != '숙소':
+                                visit_sec = int(base_visit_sec * stay_multiplier)
+                            else:
+                                visit_sec = int(base_visit_sec)
+                                
+                            travel_sec = self.distance_service.get_travel_time(
+                                curr_p['lat'], curr_p['lng'],
+                                next_p['lat'], next_p['lng'],
+                                is_korea, travel_mode
+                            )
+                            if travel_sec == 999999:
+                                travel_sec = 30 * 60
+                                
+                            current_time = current_time + timedelta(seconds=visit_sec + travel_sec)
         
         return final_plans
     
@@ -609,10 +666,11 @@ class ItineraryGenerator:
                     else:
                         visit_duration_seconds = int(base_visit_sec)
 
-                    travel_duration_seconds = self.distance_service.get_travel_time(
+                    # [성능 최적화] 스케줄링 단계에서는 API 지연을 없애기 위해 근사 시간 사용
+                    # (최종 응답 직전에 preload_travel_times로 정확한 시간 재조정됨)
+                    travel_duration_seconds = self.distance_service.get_approximate_travel_time(
                         last_place['lat'], last_place['lng'],
-                        selected['lat'], selected['lng'],
-                        is_korea, travel_mode
+                        selected['lat'], selected['lng']
                     )
 
                     if travel_duration_seconds == 999999:
