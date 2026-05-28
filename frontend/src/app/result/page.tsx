@@ -21,6 +21,7 @@ export default function ResultPage() {
   const [isRegenerating, setIsRegenerating] = useState(false);
   const [apiData, setApiData] = useState<any>(null);
   const [previousApiData, setPreviousApiData] = useState<any>(null);
+  const [newPlaceCount, setNewPlaceCount] = useState<number | null>(null);
   const [userData, setUserData] = useState<any>(null);
   const [isLoading, setIsLoading] = useState(true);
 
@@ -163,6 +164,19 @@ export default function ResultPage() {
       .filter((p: any) => p.lat && p.lng && p.lat !== 0 && p.lng !== 0)
       .map((p: any) => [parseFloat(p.lat), parseFloat(p.lng)]);
 
+    // 재추천 후 새 장소 이름 집합 (마커 색 분기용)
+    const prevPlaceNames = new Set<string>();
+    if (previousApiData) {
+      const prevPlan = previousApiData.plans[activeTab] || previousApiData.plans[0];
+      if (prevPlan) {
+        for (const day of prevPlan.days) {
+          for (const place of day.places) {
+            prevPlaceNames.add(place.name);
+          }
+        }
+      }
+    }
+
     // 비동기 도로 라우팅 경로 데이터 로드 및 그리기
     const renderRouteAndMarkers = async () => {
       if (spotCoordinates.length > 0) {
@@ -203,34 +217,42 @@ export default function ResultPage() {
         }).addTo(map);
 
         // 2) 번호가 박힌 커스텀 마커 배지 핀 생성
+        // 재추천 후 새 장소: 초록(#10b981), 기존 장소: 파란(#2563eb)
         placesToDraw.forEach((p: any, idx: number) => {
           if (!p.lat || !p.lng || p.lat === 0 || p.lng === 0) return;
 
+          const isNewMarker = previousApiData !== null && !prevPlaceNames.has(p.name);
+          const markerColor = isNewMarker ? '#10b981' : '#2563eb';
+          const markerLabel = isNewMarker ? `✦${idx + 1}` : `${idx + 1}`;
+
           const numberIcon = L.divIcon({
             html: `<div style="
-              background-color: #2563eb; 
-              color: white; 
-              border: 2px solid white; 
-              border-radius: 50%; 
-              width: 28px; 
-              height: 28px; 
-              display: flex; 
-              align-items: center; 
-              justify-content: center; 
-              font-weight: 800; 
-              font-size: 12px; 
+              background-color: ${markerColor};
+              color: white;
+              border: 2px solid white;
+              border-radius: 50%;
+              width: 28px;
+              height: 28px;
+              display: flex;
+              align-items: center;
+              justify-content: center;
+              font-weight: 800;
+              font-size: ${isNewMarker ? '10px' : '12px'};
               box-shadow: 0 4px 6px -1px rgba(0,0,0,0.15), 0 2px 4px -1px rgba(0,0,0,0.08);
-            ">${idx + 1}</div>`,
+            ">${markerLabel}</div>`,
             className: 'custom-map-badge',
             iconSize: [28, 28],
             iconAnchor: [14, 14]
           });
 
           const marker = L.marker([parseFloat(p.lat), parseFloat(p.lng)], { icon: numberIcon }).addTo(map);
+          const timeColor = isNewMarker ? '#10b981' : '#2563eb';
+          const newBadge = isNewMarker ? '<span style="font-size:10px;color:#10b981;font-weight:700;">✦ 새로 추천됨</span><br/>' : '';
 
           marker.bindPopup(`
             <div style="font-family: system-ui, sans-serif; padding: 4px; max-width: 200px;">
-              <div style="font-size: 11px; font-weight: 800; color: #2563eb;">⏱️ ${p.time}</div>
+              ${newBadge}
+              <div style="font-size: 11px; font-weight: 800; color: ${timeColor};">⏱️ ${p.time}</div>
               <strong style="font-size: 14px; color: #1e293b; display: block; margin-top: 2px;">${p.name}</strong>
               <span style="font-size: 10px; color: #64748b; background-color: #f1f5f9; padding: 1px 6px; border-radius: 4px; display: inline-block; margin-top: 4px;">${p.type}</span>
               <p style="font-size: 11px; margin: 6px 0 0 0; color: #475569; line-height: 1.4; border-top: 1px solid #f1f5f9; padding-top: 6px;">${p.desc}</p>
@@ -251,7 +273,7 @@ export default function ResultPage() {
         mapRef.current = null;
       }
     };
-  }, [isLeafletLoaded, apiData, activeTab, selectedDay]);
+  }, [isLeafletLoaded, apiData, activeTab, selectedDay, previousApiData]);
 
   const handleRegenerate = async () => {
     if (!userData) return;
@@ -270,6 +292,20 @@ export default function ResultPage() {
       });
       if (res.ok) {
         const newData = await res.json();
+
+        // 새 장소 수 계산 (테마 0 기준으로 비교)
+        const oldPlan = apiData?.plans?.[0];
+        const newPlan = newData?.plans?.[0];
+        if (oldPlan && newPlan) {
+          const oldNames = new Set<string>(
+            oldPlan.days.flatMap((d: any) => d.places.map((p: any) => p.name))
+          );
+          const count = newPlan.days
+            .flatMap((d: any) => d.places)
+            .filter((p: any) => !oldNames.has(p.name)).length;
+          setNewPlaceCount(count);
+        }
+
         setApiData(newData);
         // page.tsx와 동일한 { data, savedAt } 형식으로 저장
         localStorage.setItem("api_result", JSON.stringify({ data: newData, savedAt: Date.now() }));
@@ -768,6 +804,14 @@ export default function ResultPage() {
           ))}
         </div>
 
+        {/* ✨ 재추천 변경 장소 요약 배너 */}
+        {newPlaceCount !== null && newPlaceCount > 0 && (
+          <div className="flex items-center justify-between px-4 py-3 mb-6 bg-indigo-50 border border-indigo-200 rounded-xl text-indigo-700 text-sm font-medium shadow-sm">
+            <span>✨ <strong>{newPlaceCount}개</strong> 장소가 새로 추천됐습니다 — 초록 마커 · 인디고 테두리 카드로 표시됩니다</span>
+            <button onClick={() => setNewPlaceCount(null)} className="text-indigo-400 hover:text-indigo-600 ml-4 text-base leading-none">✕</button>
+          </div>
+        )}
+
         {/* 🚀 premium 패키지 통합 예약 및 결제 CTA 영역 */}
         <div className="bg-gradient-to-r from-blue-600 via-indigo-600 to-sky-600 rounded-3xl p-6 md:p-8 text-white shadow-xl shadow-blue-500/20 mb-8 flex flex-col md:flex-row items-center justify-between gap-6 relative overflow-hidden border border-white/10">
           <div className="absolute -right-12 -bottom-12 w-48 h-48 bg-white/5 rounded-full blur-2xl"></div>
@@ -815,7 +859,7 @@ export default function ResultPage() {
                 
                 <div className="space-y-4 ml-2">
                   {dayObj.places.map((place: any, pIdx: number) => (
-                    <div key={pIdx} className="group p-5 bg-white/90 backdrop-blur-sm border border-slate-100 rounded-2xl hover:bg-white transition-all duration-300 hover:-translate-y-1 hover:shadow-xl hover:shadow-blue-900/5">
+                    <div key={pIdx} className={`group p-5 backdrop-blur-sm rounded-2xl transition-all duration-300 hover:-translate-y-1 hover:shadow-xl hover:shadow-blue-900/5 ${previousApiData && isNewPlace(activeTab, place.name) ? 'bg-indigo-50/60 border-2 border-indigo-300 hover:bg-indigo-50' : 'bg-white/90 border border-slate-100 hover:bg-white'}`}>
                       <div className="flex items-center gap-3 mb-2">
                         <span className="px-2.5 py-1 bg-blue-50 text-blue-600 rounded-md text-xs font-bold font-mono border border-blue-100">
                           {place.time}

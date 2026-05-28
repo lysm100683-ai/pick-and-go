@@ -111,13 +111,13 @@ class ScoringService:
         [Phase 1] 상위 N개 방문 후보 장소 추출
         N = num_days × CANDIDATE_POOL_RATIO (= 5)
 
-        [재추천 다양성] 상위 2N 풀에서 N개를 무작위 샘플링.
-        항상 같은 상위 N개가 선택되면 TSP 결과도 결정론적으로 동일해지므로,
-        상위 50% 품질 보장 범위 내에서 매 요청마다 다른 조합을 선택한다.
+        [재추천 다양성] 상위 3N 풀에서 N개를 무작위 샘플링.
+        2N 풀에서는 최상위 장소(한라산·성산일출봉 등)가 항상 포함되어 다양성이 낮으므로,
+        3N 풀로 확대하여 하위권 장소도 진입할 수 있도록 함.
         """
         import random
         n = num_days * CANDIDATE_POOL_RATIO
-        pool = places[:n * 2]  # 상위 2N개: 품질 기준선 유지
+        pool = places[:n * 3]  # 상위 3N개: 재추천마다 더 넓은 후보군
         return random.sample(pool, min(n, len(pool)))
 
     @staticmethod
