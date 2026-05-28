@@ -156,12 +156,19 @@ async def _cancel_item(item: dict) -> None:
     item_type = item.get("item_type", "unknown")
 
     # Duffel 실 항공 취소
+    # [BUG FIX] MOCK_FLIGHT=false여도 Duffel 실 API 실패 시 Mock 폴백 예약이 생성될 수 있음.
+    # partner_name에 "mock" 포함 여부로 실 예약 여부를 구분 (sub3 패턴 일관성 유지).
     if item_type == "flight" and not MOCK_FLIGHT:
-        try:
-            await asyncio.to_thread(_duffel_cancel_order, booking_id)
-            print(f"[Sub2] 롤백(Duffel): flight {booking_id} 취소 완료")
-        except Exception as e:
-            print(f"[Sub2] 롤백 경고: flight {booking_id} 취소 실패 — {e}")
+        partner_name = item.get("partner_name", "")
+        if "mock" in partner_name.lower():
+            # Duffel 실 API 실패로 Mock 폴백된 예약 — 취소할 실 예약 없음
+            print(f"[Sub2] 롤백(Mock 폴백): flight {booking_id} Duffel 취소 skip (실 예약 없음)")
+        else:
+            try:
+                await asyncio.to_thread(_duffel_cancel_order, booking_id)
+                print(f"[Sub2] 롤백(Duffel): flight {booking_id} 취소 완료")
+            except Exception as e:
+                print(f"[Sub2] 롤백 경고: flight {booking_id} 취소 실패 — {e}")
     # LiteAPI 실 숙소 취소
     elif item_type == "hotel" and not MOCK_HOTEL:
         try:

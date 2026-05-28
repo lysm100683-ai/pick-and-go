@@ -187,8 +187,9 @@ export default function ResultPage() {
 
         let finalRouteCoords = spotCoordinates;
 
-        // 🛣️ 2개 이상, 25개 이하 장소일 때 OSRM API 호출 (25개 초과 시 TooBig 에러 발생)
-        if (spotCoordinates.length > 1 && spotCoordinates.length <= 25) {
+        // 🛣️ 특정 일차 선택 시에만 OSRM 호출 (25개 이하 보장)
+        // "전체 동선" 보기: 100개+ 장소 → OSRM TooBig 오류 + 직선이 지저분 → 마커만 표시
+        if (selectedDay !== "all" && spotCoordinates.length > 1 && spotCoordinates.length <= 25) {
           setIsRouteLoading(true);
           const coordString = spotCoordinates.map(c => `${c[1]},${c[0]}`).join(';');
           // OSRM Driving Service
@@ -212,16 +213,16 @@ export default function ResultPage() {
           } finally {
             setIsRouteLoading(false);
           }
-        }
-        // 25개 초과 시 finalRouteCoords = spotCoordinates (직선 연결)로 유지
 
-        // 1) 🛣️ 실제 도로 경로 실선 그리기
-        L.polyline(finalRouteCoords, {
-          color: '#3b82f6', // 세련된 파란색
-          weight: 5,
-          opacity: 0.85,
-          lineJoin: 'round'
-        }).addTo(map);
+          // 1) 🛣️ 특정 일차: 실제 도로 경로 실선 그리기
+          L.polyline(finalRouteCoords, {
+            color: '#3b82f6',
+            weight: 5,
+            opacity: 0.85,
+            lineJoin: 'round'
+          }).addTo(map);
+        }
+        // "전체 동선": 경로선 없이 마커만 표시 (개요 지도)
 
         // 2) 번호가 박힌 커스텀 마커 배지 핀 생성
         // 재추천 후 새 장소: 초록(#10b981), 기존 장소: 파란(#2563eb)
@@ -931,21 +932,22 @@ export default function ResultPage() {
               </div>
               
               {/* 🗺️ 실제 로딩 완료된 Leaflet 맵 컨테이너 탑재 */}
-              {/* [BUG FIX] overflow-hidden을 Leaflet div에 직접 두면 타일 클리핑 발생 → wrapper 분리 */}
-              <div className="w-full h-[600px] rounded-3xl border border-slate-200 overflow-hidden shadow-xl shadow-slate-200/50">
-                <div
-                  id="map-container"
-                  className="w-full h-full bg-slate-50 relative z-0"
-                >
-                  {(isRouteLoading || !isLeafletLoaded) && (
-                    <div className="absolute inset-0 flex flex-col items-center justify-center bg-white/70 z-10">
-                      <Loader2 className="w-10 h-10 text-blue-500 animate-spin mb-3" />
-                      <p className="text-sm font-bold text-slate-500">
-                        {!isLeafletLoaded ? '대화형 지도 엔진 초기화 중...' : '🛣️ 실제 도로 경로 실시간 탐색 중...'}
-                      </p>
-                    </div>
-                  )}
-                </div>
+              {/* [BUG FIX] overflow-hidden 대신 clip-path 사용 — overflow-hidden은 Leaflet 타일 pre-fetch를 */}
+              {/* 클리핑하여 블록 단위 깨짐을 유발. clip-path는 CSS 렌더링 단계에서만 잘라내므로 Leaflet 내부 동작에 무관. */}
+              {/* h-[600px] 명시적 고정 — h-full 사용 시 Leaflet 초기화 타이밍에 따라 높이 0 계산 가능 */}
+              <div
+                id="map-container"
+                className="w-full h-[600px] bg-slate-50 rounded-3xl border border-slate-200 shadow-xl shadow-slate-200/50 relative z-0"
+                style={{ clipPath: 'inset(0 round 1.5rem)' }}
+              >
+                {(isRouteLoading || !isLeafletLoaded) && (
+                  <div className="absolute inset-0 flex flex-col items-center justify-center bg-white/70 z-10">
+                    <Loader2 className="w-10 h-10 text-blue-500 animate-spin mb-3" />
+                    <p className="text-sm font-bold text-slate-500">
+                      {!isLeafletLoaded ? '대화형 지도 엔진 초기화 중...' : '🛣️ 실제 도로 경로 실시간 탐색 중...'}
+                    </p>
+                  </div>
+                )}
               </div>
             </div>
           </div>
