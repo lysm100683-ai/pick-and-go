@@ -22,6 +22,7 @@ Phase 3: 1차 경로 최적화 (Nearest Neighbor TSP + 2-Opt)
 """
 
 import math
+import random
 from typing import List, Dict, Any, Tuple, Optional
 
 from .distance_service import DistanceService
@@ -190,18 +191,24 @@ class TSPService:
             prev_lat, prev_lng, next_lat, next_lng
         )
 
-        best_place:  Optional[Dict[str, Any]] = None
-        best_detour: float = float('inf')
-
+        # detour 값을 기준으로 후보들을 평가
+        scored_candidates = []
         for meal in meal_candidates:
             m_lat = meal.get('lat', 0.0)
             m_lng = meal.get('lng', 0.0)
             d1 = self.distance_service.haversine_distance(prev_lat, prev_lng, m_lat, m_lng)
             d2 = self.distance_service.haversine_distance(m_lat, m_lng, next_lat, next_lng)
             detour = d1 + d2 - direct
-            if detour < best_detour:
-                best_detour = detour
-                best_place  = meal
+            scored_candidates.append((detour, meal))
+
+        # 우회 거리(detour) 오름차순 정렬
+        scored_candidates.sort(key=lambda x: x[0])
+
+        # 상위 3개 후보 추출 (단순 1위만 뽑으면 재생성 시 매번 똑같은 장소가 나옴)
+        top_candidates = [meal for detour, meal in scored_candidates[:3]]
+
+        # 상위 후보 중 무작위로 하나를 선택하여 다양성 부여
+        best_place = random.choice(top_candidates) if top_candidates else None
 
         return best_place
 
